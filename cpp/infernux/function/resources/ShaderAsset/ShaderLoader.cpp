@@ -1,0 +1,201 @@
+#include "ShaderLoader.h"
+
+#include <core/log/InxLog.h>
+#include <function/resources/AssetDatabase/AssetDatabase.h>
+#include <function/resources/InxFileLoader/InxShaderLoader.hpp>
+#include <function/resources/InxResource/InxResourceMeta.h>
+#include <function/resources/ShaderAsset/ShaderAsset.h>
+
+#include <platform/filesystem/InxPath.h>
+
+#include <filesystem>
+
+namespace infernux
+{
+
+// =============================================================================
+// Internal helper — compile a shader file into a ShaderAsset
+// =============================================================================
+
+static std::shared_ptr<ShaderAsset> CompileShaderAsset(const std::string &filePath, const std::string &guid,
+                                                       AssetDatabase *adb)
+{
+    if (filePath.empty() || guid.empty()) {
+        INXLOG_WARN("ShaderLoader: empty filePath or guid");
+        return nullptr;
+    }
+
+    if (!adb) {
+        INXLOG_ERROR("ShaderLoader: no AssetDatabase");
+        return nullptr;
+    }
+
+    // Read shader source
+    std::vector<char> content;
+    if (!adb->ReadFile(filePath, content)) {
+        INXLOG_ERROR("ShaderLoader: failed to read '", filePath, "'");
+        return nullptr;
+    }
+    if (content.empty()) {
+        INXLOG_ERROR("ShaderLoader: empty file '", filePath, "'");
+        return nullptr;
+    }
+    // Ensure null-terminated
+    if (content.back() != '\0')
+        content.push_back('\0');
+
+    // Determine shader type from extension
+    std::filesystem::path fsPath = ToFsPath(filePath);
+    std::string ext = fsPath.extension().string();
+
+    // Read metadata for shader_id
+    const InxResourceMeta *meta = adb->GetMetaByGuid(guid);
+    std::string shaderId;
+    if (meta && meta->HasKey("shader_id")) {
+        shaderId = meta->GetDataAs<std::string>("shader_id");
+    }
+    if (shaderId.empty()) {
+        shaderId = FromFsPath(fsPath.stem());
+    }
+
+    // Use InxShaderLoader to compile (it manages glslang, preprocessing, etc.)
+    InxShaderLoader compiler(true, false, false, false, false, false, false, false, false, false);
+
+    // RegisterResource already created the .meta — use it for Load()
+    InxResourceMeta loadMeta;
+    if (meta) {
+        loadMeta = *meta;
+    } else {
+        // Build minimal meta for compilation
+        loadMeta.AddMetadata("file_path", filePath);
+        loadMeta.AddMetadata("type", ext == ".vert" ? std::string("vertex") : std::string("fragment"));
+        loadMeta.AddMetadata("shader_id", shaderId);
+    }
+
+    InxShaderLoader::s_lastCompileError.clear();
+
+    auto compiledPtr = compiler.Compile(content.data(), content.size(), loadMeta);
+    if (!compiledPtr || compiledPtr->empty()) {
+        INXLOG_ERROR("ShaderLoader: compilation failed for '", filePath, "'");
+        return nullptr;
+    }
+
+    // Build ShaderAsset
+    auto asset = std::make_shared<ShaderAsset>();
+    asset->shaderId = shaderId;
+    asset->shaderType = (ext == ".vert") ? "vertex" : "fragment";
+    asset->filePath = filePath;
+    asset->spirvForward = std::move(*compiledPtr);
+
+    // Extract variant SPIR-V from InxShaderLoader's static caches
+    // Use the meta's file_path as cache key (matches InxShaderLoader::CompileVariant)
+    std::string cacheKey = filePath;
+    if (meta && meta->HasKey("file_path")) {
+        cacheKey = meta->GetDataAs<std::string>("file_path");
+    }
+
+    if (ext == ".vert") {
+        auto it = InxShaderLoader::s_shadowVertexVariantCache.find(cacheKey);
+        if (it != InxShaderLoader::s_shadowVertexVariantCache.end() && !it->second.empty()) {
+            asset->spirvShadowVertex = std::move(it->second);
+            InxShaderLoader::s_shadowVertexVariantCache.erase(it);
+        }
+    }
+
+    if (ext == ".frag") {
+        auto sit = InxShaderLoader::s_shadowVariantCache.find(cacheKey);
+        if (sit != InxShaderLoader::s_shadowVariantCache.end() && !sit->second.empty()) {
+            asset->spirvShadow = std::move(sit->second);
+            InxShaderLoader::s_shadowVariantCache.erase(sit);
+        }
+
+        auto git = InxShaderLoader::s_gbufferVariantCache.find(cacheKey);
+        if (git != InxShaderLoader::s_gbufferVariantCache.end() && !git->second.empty()) {
+            asset->spirvGBuffer = std::move(git->second);
+            InxShaderLoader::s_gbufferVariantCache.erase(git);
+        }
+
+        // Extract render-state annotations from meta
+        if (meta) {
+            if (meta->HasKey("shader_cull_mode"))
+                asset->renderMeta.cullMode = meta->GetDataAs<std::string>("shader_cull_mode");
+            if (meta->HasKey("shader_depth_write"))
+                asset->renderMeta.depthWrite = meta->GetDataAs<std::string>("shader_depth_write");
+            if (meta->HasKey("shader_depth_test"))
+                asset->renderMeta.depthTest = meta->GetDataAs<std::string>("shader_depth_test");
+            if (meta->HasKey("shader_blend"))
+                asset->renderMeta.blend = meta->GetDataAs<std::string>("shader_blend");
+            if (meta->HasKey("shader_queue"))
+                asset->renderMeta.queue = meta->GetDataAs<int>("shader_queue");
+            if (meta->HasKey("shader_pass_tag"))
+                asset->renderMeta.passTag = meta->GetDataAs<std::string>("shader_pass_tag");
+            if (meta->HasKey("shader_stencil"))
+                asset->renderMeta.stencil = meta->GetDataAs<std::string>("shader_stencil");
+            if (meta->HasKey("shader_alpha_test"))
+                asset->renderMeta.alphaClip = meta->GetDataAs<std::string>("shader_alpha_test");
+        }
+    }
+
+    INXLOG_INFO("ShaderLoader: compiled '", shaderId, "' (", asset->shaderType, ") from '", filePath, "'");
+    return asset;
+}
+
+// =============================================================================
+// Load
+// =============================================================================
+
+std::shared_ptr<void> ShaderLoader::Load(const std::string &filePath, const std::string &guid, AssetDatabase *adb)
+{
+    return CompileShaderAsset(filePath, guid, adb);
+}
+
+// =============================================================================
+// Reload — recompile and replace in-place
+// =============================================================================
+
+bool ShaderLoader::Reload(std::shared_ptr<void> existing, const std::string &filePath, const std::string &guid,
+                          AssetDatabase *adb)
+{
+    auto oldAsset = std::static_pointer_cast<ShaderAsset>(existing);
+    if (!oldAsset) {
+        INXLOG_WARN("ShaderLoader::Reload: null existing instance");
+        return false;
+    }
+
+    auto newAsset = CompileShaderAsset(filePath, guid, adb);
+    if (!newAsset) {
+        return false;
+    }
+
+    // Replace data in-place (preserving shared_ptr identity)
+    *oldAsset = std::move(*newAsset);
+    return true;
+}
+
+// =============================================================================
+// ScanDependencies — shaders have no outgoing asset dependencies
+// =============================================================================
+
+std::set<std::string> ShaderLoader::ScanDependencies(const std::string & /*filePath*/, AssetDatabase * /*adb*/)
+{
+    return {};
+}
+
+// =============================================================================
+// LoadMeta / CreateMeta — delegate to InxShaderLoader (the shader compiler)
+// =============================================================================
+
+bool ShaderLoader::LoadMeta(const char *content, const std::string &filePath, InxResourceMeta &metaData)
+{
+    InxShaderLoader compiler(true, false, false, false, false, false, false, false, false, false);
+    return compiler.LoadMeta(content, filePath, metaData);
+}
+
+void ShaderLoader::CreateMeta(const char *content, size_t contentSize, const std::string &filePath,
+                              InxResourceMeta &metaData)
+{
+    InxShaderLoader compiler(true, false, false, false, false, false, false, false, false, false);
+    compiler.CreateMeta(content, contentSize, filePath, metaData);
+}
+
+} // namespace infernux

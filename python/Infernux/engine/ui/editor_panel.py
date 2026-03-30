@@ -1,0 +1,215 @@
+"""
+EditorPanel — Unified base class for editor panels.
+
+All panels should inherit from this class and override
+``on_render_content(ctx)``. The base class handles window frame management,
+style push/pop, lifecycle hooks, and service access.
+
+Creating a custom panel::
+
+    from Infernux.engine.ui import EditorPanel, editor_panel, EditorEvent
+
+    @editor_panel("My Debug Panel")
+    class MyDebugPanel(EditorPanel):
+        def on_enable(self):
+            self.events.subscribe(EditorEvent.SELECTION_CHANGED, self._on_sel)
+
+        def on_disable(self):
+            self.events.unsubscribe(EditorEvent.SELECTION_CHANGED, self._on_sel)
+
+        def on_render_content(self, ctx):
+            ctx.text("Hello from my custom panel!")
+
+        def _on_sel(self, obj):
+            pass
+"""
+
+from __future__ import annotations
+
+from typing import Optional, TYPE_CHECKING
+
+from .closable_panel import ClosablePanel
+
+if TYPE_CHECKING:
+    from Infernux.lib import InxGUIContext
+    from .editor_services import EditorServices
+    from .event_bus import EditorEventBus
+
+
+class EditorPanel(ClosablePanel):
+    """Unified base class for editor panels.
+
+    Provides:
+    - ``self.services`` to access :class:`EditorServices`
+    - ``self.events`` to access :class:`EditorEventBus`
+    - ``on_enable()`` when the panel is created or reopened
+    - ``on_disable()`` when the panel closes
+    - ``on_render_content(ctx)`` for the panel body
+
+    Overridable hooks:
+    - ``_window_flags()`` returns ImGui window flags
+    - ``_initial_size()`` returns the initial window size or ``None``
+    - ``_push_window_style(ctx)`` pushes styles before ``begin_window``
+    - ``_pop_window_style(ctx)`` pops styles after ``end_window``
+    - ``_on_visible_pre(ctx)`` runs before ``on_render_content``
+    - ``save_state() / load_state(data)`` persist panel state
+    """
+
+    def __init__(self, title: str, window_id: Optional[str] = None):
+        super().__init__(title, window_id)
+        self._enable_called = False
+
+    # ------------------------------------------------------------------
+    # Service and Event Access
+    # ------------------------------------------------------------------
+
+    @property
+    def services(self) -> EditorServices:
+        """Access editor subsystems."""
+        from .editor_services import EditorServices
+        return EditorServices.instance()
+
+    @property
+    def events(self) -> EditorEventBus:
+        """Access the editor event bus."""
+        from .event_bus import EditorEventBus
+        return EditorEventBus.instance()
+
+    # ------------------------------------------------------------------
+    # Lifecycle Hooks
+    # ------------------------------------------------------------------
+
+    def on_enable(self) -> None:
+        """Called once when the panel is first rendered.
+
+        Subscribe to events here.
+        """
+        pass
+
+    def on_disable(self) -> None:
+        """Called when the panel is closed.
+
+        Unsubscribe here.
+        """
+        pass
+
+    # ------------------------------------------------------------------
+    # Window Configuration Hooks
+    # ------------------------------------------------------------------
+
+    def _window_flags(self) -> int:
+        """Return ImGui window flags for this panel.
+
+        The default is 0.
+        """
+        return 0
+
+    def _initial_size(self) -> Optional[tuple[float, float]]:
+        """Return the initial window size ``(w, h)``.
+
+        Return ``None`` to use the ImGui default.
+        """
+        return None
+
+    def _push_window_style(self, ctx) -> None:
+        """Push style vars and colors before ``begin_window``.
+
+        Subclasses must pop the same number in ``_pop_window_style``.
+        """
+        pass
+
+    def _pop_window_style(self, ctx) -> None:
+        """Pop style vars and colors after ``end_window``.
+
+        The pop count must match ``_push_window_style``.
+        """
+        pass
+
+    def _on_visible_pre(self, ctx) -> None:
+        """Run after ``begin_window`` succeeds and before content rendering.
+
+        Useful for one-shot per-frame setup such as focus tracking.
+        """
+        pass
+
+    def _on_not_visible(self, ctx) -> None:
+        """Run when ``begin_window`` returns ``False``.
+
+        Useful for resource management such as pausing render targets.
+        """
+        pass
+
+    def _pre_render(self, ctx) -> None:
+        """Run in ``on_render`` before the window begins.
+
+        Use this for per-frame work that must happen outside the window frame.
+        """
+        pass
+
+    # ------------------------------------------------------------------
+    # Content Rendering
+    # ------------------------------------------------------------------
+
+    def on_render_content(self, ctx: InxGUIContext) -> None:
+        """Render panel content.
+
+        Override this instead of ``on_render``.
+        """
+        pass
+
+    # ------------------------------------------------------------------
+    # State Persistence
+    # ------------------------------------------------------------------
+
+    def save_state(self) -> dict:
+        """Return a panel state dict for persistence."""
+        return {}
+
+    def load_state(self, data: dict) -> None:
+        """Restore panel state from persisted data."""
+        pass
+
+    # ------------------------------------------------------------------
+    # Unified Render Frame
+    # ------------------------------------------------------------------
+
+    def on_render(self, ctx) -> None:
+        """Unified render frame for the panel.
+
+        Subclasses should not override this method. Override the hook methods
+        above instead.
+        """
+        if not self._is_open:
+            return
+
+        # Trigger on_enable once.
+        if not self._enable_called:
+            self._enable_called = True
+            self.on_enable()
+
+        # Apply the initial size on first use if provided.
+        init_size = self._initial_size()
+        if init_size is not None:
+            from .theme import Theme
+            ctx.set_next_window_size(init_size[0], init_size[1], Theme.COND_FIRST_USE_EVER)
+
+        # Run pre-frame logic before the window begins.
+        self._pre_render(ctx)
+
+        # Push window styles.
+        self._push_window_style(ctx)
+
+        visible = self._begin_closable_window(ctx, self._window_flags())
+        if visible:
+            self._on_visible_pre(ctx)
+            self.on_render_content(ctx)
+        else:
+            self._on_not_visible(ctx)
+        ctx.end_window()
+
+        # Pop window styles.
+        self._pop_window_style(ctx)
+
+        # Fire the close hook when the panel is closed.
+        if not self._is_open:
+            self.on_disable()

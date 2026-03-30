@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=70.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Infernux"
+version = "0.1.0"
+description = "Open-source game engine with a C++17 / Vulkan runtime and a Python layer for gameplay, tools, and render authoring."
+authors = [{name = "Lizhe Chen", email = "chenlizheme@outlook.com"}]
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+keywords = ["game-engine", "vulkan", "python", "rendergraph", "editor"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "numpy>=1.21.0",
+    "watchdog>=1.0.0",
+    "Pillow>=10.4.0",
+    "imageio>=2.34.0",
+    "av>=12.0.0",
+]
+
+[project.urls]
+Homepage = "https://chenlizheme.github.io/Infernux/"
+Documentation = "https://chenlizheme.github.io/Infernux/wiki.html"
+Repository = "https://github.com/ChenlizheMe/Infernux"
+Issues = "https://github.com/ChenlizheMe/Infernux/issues"
+
+[project.optional-dependencies]
+launcher = ["PySide6>=6.5.0"]
+
+[tool.setuptools]
+packages = {find = {where = ["python"], exclude = ["*.__pycache__", "*.__pycache__.*"]}}
+package-dir = {"" = "python"}
+include-package-data = true
+
+[tool.setuptools.package-data]
+Infernux = ["py.typed", "*.pyi", "**/*.pyi", "*.dll", "*.pyd", "resources/icons/*.png", "resources/icons/components/*.png", "resources/fonts/*.otf", "resources/fonts/*.ttf", "resources/pictures/*.png"]

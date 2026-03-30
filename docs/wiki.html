@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docs — Infernux Engine documentation hub</title>
+    <link rel="icon" type="image/png" href="assets/logo.png">
+    <link rel="stylesheet" href="css/style.css?v=2">
+    <link rel="stylesheet" href="css/wiki.css?v=2">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="nav-logo">
+                <span class="logo-icon"><img src="assets/logo.png" alt="Infernux logo"></span>
+                <span class="logo-text">Infernux</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" data-i18n="nav.home">Home</a>
+                <a href="index.html#system" data-i18n="nav.features">Features</a>
+                <a href="index.html#capabilities" data-i18n="nav.showcase">Showcase</a>
+                <a href="index.html#difference" data-i18n="nav.comparison">Comparison</a>
+                <a href="roadmap.html" data-i18n="nav.roadmap">Roadmap</a>
+                <a href="wiki.html" class="active" data-i18n="nav.docs">Docs</a>
+                <a href="https://github.com/ChenlizheMe/Infernux" target="_blank" rel="noopener">
+                    <i class="fab fa-github"></i> GitHub
+                </a>
+            </div>
+            <div class="nav-right">
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <i class="fas fa-moon" id="theme-icon"></i>
+                </button>
+                <button class="lang-toggle" onclick="toggleLanguage()">
+                    <span id="lang-text">中文</span>
+                </button>
+                <button class="mobile-menu-btn" onclick="toggleMobileMenu()">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="page-shell hub-layout">
+        <div class="container">
+            <section class="subpage-hero docs-hero">
+                <div class="kicker" data-i18n="wiki.hero.kicker">Documentation hub</div>
+                <h1 data-i18n="wiki.hero.title">Documentation should reduce uncertainty, not merely prove that docs exist.</h1>
+                <p data-i18n="wiki.hero.description">Use this page as the starting map into tutorials, architecture notes, API reference, release planning, and repository-level onboarding.</p>
+                <div class="hub-actions">
+                    <a href="wiki/site/en/api/index.html" data-href-en="wiki/site/en/api/index.html" data-href-zh="wiki/site/zh/api/index.html" class="btn btn-primary" data-i18n="wiki.hero.primary">Open API docs</a>
+                    <a href="https://github.com/ChenlizheMe/Infernux#readme" data-href-en="https://github.com/ChenlizheMe/Infernux#readme" data-href-zh="https://github.com/ChenlizheMe/Infernux/blob/main/README-zh.md" class="btn btn-secondary" target="_blank" rel="noopener" data-i18n="wiki.hero.secondary">Open README</a>
+                </div>
+            </section>
+
+            <section class="docs-library" id="written-guides">
+                <div class="section-head">
+                    <div>
+                        <div class="section-kicker" data-i18n="wiki.library.kicker">Written guides</div>
+                        <h2 class="section-title" data-i18n="wiki.library.title">Architecture notes, advanced guides, and system deep-dives.</h2>
+                    </div>
+                    <p class="section-intro" data-i18n="wiki.library.intro">Detailed articles covering how Infernux works internally and how to scale your project.</p>
+                </div>
+
+                <div class="wiki-toolbar">
+                    <input type="text" id="wiki-search-input" class="wiki-search-input" placeholder="Search guides..." data-i18n="wiki.library.search">
+                </div>
+                <div id="wiki-tags-filter" class="wiki-tags-filter"></div>
+
+                <div id="docs-library-groups" class="docs-library-groups">
+                    <div id="docs-library-status" class="docs-library-status" data-i18n="wiki.library.loading">Loading Markdown guides...</div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <div class="nav-logo">
+                        <span class="logo-icon"><img src="assets/logo.png" alt="Infernux logo"></span>
+                        <span class="logo-text">Infernux Engine</span>
+                    </div>
+                    <p data-i18n="footer.tagline">Open code, explicit architecture, and a render stack you can actually reason about.</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-column">
+                        <h4 data-i18n="footer.resources">Resources</h4>
+                        <a href="roadmap.html" data-i18n="nav.roadmap">Roadmap</a>
+                        <a href="https://github.com/ChenlizheMe/Infernux#readme" target="_blank" rel="noopener">README</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">&copy; 2024-2026 Lizhe Chen. MIT License.</div>
+        </div>
+    </footer>
+
+    <script src="js/i18n.js?v=2"></script>
+    <script src="js/main.js?v=2"></script>
+    <script src="js/wiki.js?v=2"></script>
+</body>
+</html>

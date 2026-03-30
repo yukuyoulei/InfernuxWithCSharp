@@ -1,0 +1,774 @@
+/**
+ * @file GPUMaterialPreview.cpp
+ * @brief GPU material preview — renders a sphere using the material's real
+ *        Vulkan pipeline and reads back RGBA8 pixels for editor thumbnails.
+ */
+
+#include "GPUMaterialPreview.h"
+#include "InxError.h"
+#include <function/renderer/EngineGlobals.h>
+#include <function/renderer/InxRenderStruct.h>
+#include <function/renderer/InxVkCoreModular.h>
+#include <function/renderer/MaterialPipelineManager.h>
+#include <function/renderer/shader/ShaderProgram.h>
+#include <function/renderer/vk/VkResourceManager.h>
+#include <function/resources/InxMaterial/InxMaterial.h>
+#include <function/scene/LightingData.h>
+#include <function/scene/PrimitiveMeshes.h>
+
+#include <algorithm>
+#include <cmath>
+#include <core/log/InxLog.h>
+#include <cstring>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+namespace infernux
+{
+
+namespace
+{
+constexpr float kPreviewMatteR = 0.125f;
+constexpr float kPreviewMatteG = 0.125f;
+constexpr float kPreviewMatteB = 0.125f;
+constexpr float kPreviewMatteA = 1.0f;
+constexpr float kPreviewCameraDistance = 2.0f;
+constexpr float kPreviewModelScale = 1.28f;
+constexpr int kPreviewSupersampleFactor = 2;
+
+float ComputePreviewCoverage(int pixelX, int pixelY, int renderSize)
+{
+    if (renderSize <= 0)
+        return 0.0f;
+
+    constexpr float kBaseSphereRadius = 0.5f;
+    constexpr float kVerticalFovDegrees = 45.0f;
+
+    const float sphereRadius = kBaseSphereRadius * kPreviewModelScale;
+    const float cameraDistance = std::max(kPreviewCameraDistance, sphereRadius + 1e-4f);
+    const float cotHalfFov = 1.0f / std::tan(glm::radians(kVerticalFovDegrees) * 0.5f);
+    const float tangentDepth =
+        std::sqrt(std::max(cameraDistance * cameraDistance - sphereRadius * sphereRadius, 1e-6f));
+    const float ndcRadius = cotHalfFov * (sphereRadius / tangentDepth);
+    const float radius01 = 0.5f * ndcRadius;
+    const float feather = 1.5f / static_cast<float>(renderSize);
+
+    const float fx = (static_cast<float>(pixelX) + 0.5f) / static_cast<float>(renderSize) - 0.5f;
+    const float fy = (static_cast<float>(pixelY) + 0.5f) / static_cast<float>(renderSize) - 0.5f;
+    const float dist = std::sqrt(fx * fx + fy * fy);
+    return std::clamp((radius01 + feather - dist) / (2.0f * feather), 0.0f, 1.0f);
+}
+
+glm::vec3 RemovePreviewMatte(const glm::vec3 &rgb, float alpha)
+{
+    if (alpha <= 0.0f || alpha >= 0.999f)
+        return rgb;
+
+    const glm::vec3 matte(kPreviewMatteR, kPreviewMatteG, kPreviewMatteB);
+    return glm::max((rgb - matte * (1.0f - alpha)) / alpha, glm::vec3(0.0f));
+}
+
+void DownsampleRGBABox(const std::vector<unsigned char> &srcPixels, int srcSize, int dstSize,
+                       std::vector<unsigned char> &dstPixels)
+{
+    if (srcSize <= 0 || dstSize <= 0 || srcPixels.empty()) {
+        dstPixels.clear();
+        return;
+    }
+
+    if (srcSize == dstSize) {
+        dstPixels = srcPixels;
+        return;
+    }
+
+    dstPixels.assign(static_cast<size_t>(dstSize) * dstSize * 4, 0);
+
+    const float scale = static_cast<float>(srcSize) / static_cast<float>(dstSize);
+    for (int y = 0; y < dstSize; ++y) {
+        const int y0 = std::max(0, static_cast<int>(std::floor(y * scale)));
+        const int y1 = std::min(srcSize, static_cast<int>(std::ceil((y + 1) * scale)));
+        for (int x = 0; x < dstSize; ++x) {
+            const int x0 = std::max(0, static_cast<int>(std::floor(x * scale)));
+            const int x1 = std::min(srcSize, static_cast<int>(std::ceil((x + 1) * scale)));
+
+            int sampleCount = 0;
+            int accum[4] = {0, 0, 0, 0};
+            for (int sy = y0; sy < y1; ++sy) {
+                for (int sx = x0; sx < x1; ++sx) {
+                    const size_t srcIndex = (static_cast<size_t>(sy) * srcSize + sx) * 4;
+                    accum[0] += srcPixels[srcIndex + 0];
+                    accum[1] += srcPixels[srcIndex + 1];
+                    accum[2] += srcPixels[srcIndex + 2];
+                    accum[3] += srcPixels[srcIndex + 3];
+                    ++sampleCount;
+                }
+            }
+
+            if (sampleCount <= 0)
+                continue;
+
+            const size_t dstIndex = (static_cast<size_t>(y) * dstSize + x) * 4;
+            dstPixels[dstIndex + 0] = static_cast<unsigned char>(accum[0] / sampleCount);
+            dstPixels[dstIndex + 1] = static_cast<unsigned char>(accum[1] / sampleCount);
+            dstPixels[dstIndex + 2] = static_cast<unsigned char>(accum[2] / sampleCount);
+            dstPixels[dstIndex + 3] = static_cast<unsigned char>(accum[3] / sampleCount);
+        }
+    }
+}
+} // namespace
+
+// ============================================================================
+// Construction / Destruction
+// ============================================================================
+
+GPUMaterialPreview::GPUMaterialPreview(InxVkCoreModular *vkCore) : m_vkCore(vkCore)
+{
+}
+
+GPUMaterialPreview::~GPUMaterialPreview()
+{
+    VkDevice device = m_vkCore ? m_vkCore->GetDevice() : VK_NULL_HANDLE;
+    if (device == VK_NULL_HANDLE)
+        return;
+
+    vkDeviceWaitIdle(device);
+    DestroyFramebuffer();
+
+    if (m_renderPass != VK_NULL_HANDLE)
+        vkDestroyRenderPass(device, m_renderPass, nullptr);
+
+    m_sphereVBO.reset();
+    m_sphereIBO.reset();
+    m_staging.Destroy();
+}
+
+// ============================================================================
+// RenderToPixels — main entry point
+// ============================================================================
+
+bool GPUMaterialPreview::RenderToPixels(InxMaterial &material, int size, std::vector<unsigned char> &outPixels)
+{
+    if (!m_vkCore || size <= 0)
+        return false;
+
+    const int renderSize = std::max(size, size * kPreviewSupersampleFactor);
+    const glm::mat4 previewModel = glm::scale(glm::mat4(1.0f), glm::vec3(kPreviewModelScale));
+    const glm::mat4 previewNormal = glm::transpose(glm::inverse(previewModel));
+
+    // Ensure the material has a forward pipeline
+    VkPipeline pipeline = material.GetPassPipeline(ShaderCompileTarget::Forward);
+    VkPipelineLayout pipelineLayout = material.GetPassPipelineLayout(ShaderCompileTarget::Forward);
+    VkDescriptorSet matDescSet = material.GetPassDescriptorSet(ShaderCompileTarget::Forward);
+    ShaderProgram *program = material.GetPassShaderProgram(ShaderCompileTarget::Forward);
+
+    if (pipeline == VK_NULL_HANDLE || pipelineLayout == VK_NULL_HANDLE || matDescSet == VK_NULL_HANDLE ||
+        program == nullptr) {
+        INXLOG_WARN("GPUMaterialPreview: material pipeline not ready");
+        return false;
+    }
+
+    if (!EnsureResources(renderSize))
+        return false;
+
+    // Update material UBO so GPU-side data is current
+    m_vkCore->UpdateMaterialUBO(material);
+
+    // ------------------------------------------------------------------
+    // Prepare preview scene UBO (camera looking at sphere)
+    // ------------------------------------------------------------------
+    float aspect = 1.0f;
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 0.0f, kPreviewCameraDistance), glm::vec3(0.0f, 0.0f, 0.0f),
+                                 glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
+    proj[1][1] *= -1.0f; // Vulkan Y-flip
+
+    UniformBufferObject sceneUBO{};
+    sceneUBO.model = previewModel;
+    sceneUBO.view = view;
+    sceneUBO.proj = proj;
+
+    // ------------------------------------------------------------------
+    // Prepare preview lighting UBO.
+    // Use a soft two-light rig plus ambient probe so aggressive normal-map
+    // values still read as a sphere instead of collapsing into a tiny bright
+    // patch under a single hard key light.
+    // ------------------------------------------------------------------
+    ShaderLightingUBO lightingUBO{};
+    memset(&lightingUBO, 0, sizeof(lightingUBO));
+    lightingUBO.lightCounts = glm::ivec4(2, 0, 0, 0);
+    lightingUBO.ambientColor = glm::vec4(0.06f, 0.06f, 0.07f, 1.0f);
+    lightingUBO.ambientSkyColor = glm::vec4(0.18f, 0.19f, 0.22f, 0.55f);
+    lightingUBO.ambientEquatorColor = glm::vec4(0.09f, 0.10f, 0.12f, 1.0f);
+    lightingUBO.ambientGroundColor = glm::vec4(0.04f, 0.035f, 0.03f, 0.30f);
+    lightingUBO.cameraPos = glm::vec4(0.0f, 0.0f, kPreviewCameraDistance, 1.0f);
+
+    // Main key light — top-right-front
+    lightingUBO.directionalLights[0].direction = glm::vec4(glm::normalize(glm::vec3(-0.8f, -1.0f, -0.6f)), 0.0f);
+    // color.rgb = color * intensity, color.a = intensity
+    lightingUBO.directionalLights[0].color = glm::vec4(2.0f * 1.0f, 2.0f * 0.95f, 2.0f * 0.9f, 2.0f);
+
+    // Fill light — back-left to keep the sphere readable under harsh normals.
+    lightingUBO.directionalLights[1].direction = glm::vec4(glm::normalize(glm::vec3(0.6f, 0.3f, -0.8f)), 0.0f);
+    lightingUBO.directionalLights[1].color = glm::vec4(0.6f * 0.6f, 0.6f * 0.7f, 0.6f * 0.85f, 0.6f);
+
+    // ------------------------------------------------------------------
+    // Prepare engine globals UBO (minimal)
+    // ------------------------------------------------------------------
+    EngineGlobalsUBO globalsUBO{};
+    memset(&globalsUBO, 0, sizeof(globalsUBO));
+    globalsUBO.screenParams =
+        glm::vec4(static_cast<float>(renderSize), static_cast<float>(renderSize), 1.0f / renderSize, 1.0f / renderSize);
+    globalsUBO.worldSpaceCameraPos = glm::vec4(0.0f, 0.0f, kPreviewCameraDistance, 1.0f);
+
+    // ------------------------------------------------------------------
+    // Buffer / descriptor-set indexing
+    //
+    // Material descriptor sets (set 0) are always bound to
+    // m_uniformBuffers[0] and m_lightingUboBuffers[0], so the preview
+    // must write its scene and lighting UBO data into index 0 — not the
+    // current swapchain frame index.  Using a non-zero index would leave
+    // the descriptor set pointing at stale scene-camera data, causing
+    // the preview sphere to render with the wrong view/proj matrices
+    // (visible as a small, distorted sphere inside the correct-sized
+    // alpha mask).
+    //
+    // Set 2 (globals + instance SSBO) IS per-frame: each frame's
+    // descriptor set references m_globalsBuffers[frame] and
+    // m_instanceBuffers[frame], so we still use the current frame index
+    // for those.
+    // ------------------------------------------------------------------
+    const uint32_t frameIndex =
+        m_vkCore->GetSwapchain().GetCurrentFrame() % std::max(1u, m_vkCore->GetMaxFramesInFlight());
+
+    VkBuffer sceneUBOBuf = m_vkCore->GetUniformBuffer(0);
+    VkBuffer lightingUBOBuf = m_vkCore->GetLightingUBO(0);
+    VkBuffer globalsUBOBuf = m_vkCore->GetGlobalsBuffer(frameIndex);
+    VkBuffer instanceSSBOBuf = m_vkCore->GetInstanceSSBO(frameIndex);
+    VkDescriptorSet shadowDesc = VK_NULL_HANDLE;
+    VkDescriptorSet globalsDesc = VK_NULL_HANDLE;
+
+    if (sceneUBOBuf == VK_NULL_HANDLE || lightingUBOBuf == VK_NULL_HANDLE) {
+        INXLOG_WARN("GPUMaterialPreview: UBO buffers not ready");
+        return false;
+    }
+
+    // ------------------------------------------------------------------
+    // Record single-time command buffer
+    // ------------------------------------------------------------------
+    VkCommandBuffer cmd = m_vkCore->BeginSingleTimeCommands();
+    if (cmd == VK_NULL_HANDLE)
+        return false;
+
+    // Write preview data into the renderer's existing UBOs
+    vkCmdUpdateBuffer(cmd, sceneUBOBuf, 0, sizeof(sceneUBO), &sceneUBO);
+    vkCmdUpdateBuffer(cmd, lightingUBOBuf, 0, sizeof(lightingUBO), &lightingUBO);
+
+    if (globalsUBOBuf != VK_NULL_HANDLE)
+        vkCmdUpdateBuffer(cmd, globalsUBOBuf, 0, sizeof(globalsUBO), &globalsUBO);
+
+    // Write identity matrix at instance 0 for the sphere. The instance SSBO is
+    // host-visible and intentionally created without TRANSFER_DST usage, so
+    // update it through a mapped CPU pointer rather than vkCmdUpdateBuffer.
+    if (instanceSSBOBuf != VK_NULL_HANDLE) {
+        if (!m_vkCore->WriteInstanceMatrix(frameIndex, 0, previewModel)) {
+            INXLOG_WARN("GPUMaterialPreview: failed to write preview instance matrix");
+            return false;
+        }
+    }
+
+    if (program->HasDeclaredDescriptorSet(1)) {
+        shadowDesc = m_vkCore->GetActiveShadowDescriptorSet();
+        if (shadowDesc == VK_NULL_HANDLE) {
+            if (m_fallbackShadowDescSet == VK_NULL_HANDLE)
+                m_fallbackShadowDescSet = m_vkCore->AllocatePerViewDescriptorSet();
+            shadowDesc = m_fallbackShadowDescSet;
+        }
+        if (shadowDesc == VK_NULL_HANDLE) {
+            INXLOG_WARN("GPUMaterialPreview: shader requires set 1 but no shadow descriptor is available");
+            return false;
+        }
+    }
+
+    if (program->HasDeclaredDescriptorSet(2)) {
+        if (globalsUBOBuf == VK_NULL_HANDLE || instanceSSBOBuf == VK_NULL_HANDLE) {
+            INXLOG_WARN("GPUMaterialPreview: shader requires set 2 but globals or instance buffers are unavailable");
+            return false;
+        }
+        globalsDesc = m_vkCore->GetCurrentGlobalsDescSet();
+        if (globalsDesc == VK_NULL_HANDLE) {
+            INXLOG_WARN("GPUMaterialPreview: shader requires set 2 but no globals descriptor is available");
+            return false;
+        }
+    }
+
+    // Memory barrier: make UBO writes visible to shaders
+    VkMemoryBarrier uboBarrier{};
+    uboBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    uboBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    uboBarrier.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &uboBarrier,
+                         0, nullptr, 0, nullptr);
+
+    // ------------------------------------------------------------------
+    // Begin render pass
+    // ------------------------------------------------------------------
+    VkClearValue clearValues[2];
+    clearValues[0].color = {{kPreviewMatteR, kPreviewMatteG, kPreviewMatteB, kPreviewMatteA}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_renderPass;
+    rpBegin.framebuffer = m_framebuffer;
+    rpBegin.renderArea.offset = {0, 0};
+    rpBegin.renderArea.extent = {static_cast<uint32_t>(renderSize), static_cast<uint32_t>(renderSize)};
+    rpBegin.clearValueCount = 2;
+    rpBegin.pClearValues = clearValues;
+
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Viewport & scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(renderSize);
+    viewport.height = static_cast<float>(renderSize);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {static_cast<uint32_t>(renderSize), static_cast<uint32_t>(renderSize)};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    // Bind material pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+    // Bind descriptor sets
+    // Set 0 — material (scene UBO + lighting UBO + material UBO + textures)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &matDescSet, 0, nullptr);
+
+    // Set 1 — shadow (if the shader declares it)
+    if (program->HasDeclaredDescriptorSet(1)) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &shadowDesc, 0, nullptr);
+    }
+
+    // Set 2 — engine globals (if the shader declares it)
+    if (program->HasDeclaredDescriptorSet(2)) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 2, 1, &globalsDesc, 0, nullptr);
+    }
+
+    // Bind sphere geometry
+    VkBuffer vbo = m_sphereVBO->GetBuffer();
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vbo, offsets);
+    vkCmdBindIndexBuffer(cmd, m_sphereIBO->GetBuffer(), 0, VK_INDEX_TYPE_UINT32);
+
+    // Push constants (identity model + normalMat)
+    struct PushConstants
+    {
+        glm::mat4 model;
+        glm::mat4 normalMat;
+    };
+    PushConstants pushData{};
+    pushData.model = previewModel;
+    pushData.normalMat = previewNormal;
+    vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &pushData);
+
+    // Draw sphere
+    vkCmdDrawIndexed(cmd, m_sphereIndexCount, 1, 0, 0, 0);
+
+    vkCmdEndRenderPass(cmd);
+
+    // ------------------------------------------------------------------
+    // Resolve MSAA → single-sample resolve image
+    // ------------------------------------------------------------------
+    if (m_sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+        // Transition MSAA color → TRANSFER_SRC
+        VkImageMemoryBarrier msaaBarrier{};
+        msaaBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        msaaBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        msaaBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        msaaBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        msaaBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        msaaBarrier.image = m_msaaColor.GetImage();
+        msaaBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &msaaBarrier);
+
+        // Transition resolve → TRANSFER_DST
+        VkImageMemoryBarrier resolveBarrier{};
+        resolveBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        resolveBarrier.srcAccessMask = 0;
+        resolveBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        resolveBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        resolveBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        resolveBarrier.image = m_resolveColor.GetImage();
+        resolveBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &resolveBarrier);
+
+        // Resolve
+        VkImageResolve resolveRegion{};
+        resolveRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        resolveRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        resolveRegion.extent = {static_cast<uint32_t>(renderSize), static_cast<uint32_t>(renderSize), 1};
+        vkCmdResolveImage(cmd, m_msaaColor.GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_resolveColor.GetImage(),
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolveRegion);
+
+        // Transition resolve → TRANSFER_SRC for readback
+        VkImageMemoryBarrier readbackBarrier{};
+        readbackBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        readbackBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        readbackBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        readbackBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        readbackBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        readbackBarrier.image = m_resolveColor.GetImage();
+        readbackBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &readbackBarrier);
+    } else {
+        // No MSAA — transition MSAA color (which is really 1x) → TRANSFER_SRC
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.image = m_msaaColor.GetImage();
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &barrier);
+    }
+
+    // ------------------------------------------------------------------
+    // Copy resolved image → staging buffer
+    // ------------------------------------------------------------------
+    VkImage srcImage = (m_sampleCount != VK_SAMPLE_COUNT_1_BIT) ? m_resolveColor.GetImage() : m_msaaColor.GetImage();
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.bufferOffset = 0;
+    copyRegion.bufferRowLength = 0;
+    copyRegion.bufferImageHeight = 0;
+    copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copyRegion.imageOffset = {0, 0, 0};
+    copyRegion.imageExtent = {static_cast<uint32_t>(renderSize), static_cast<uint32_t>(renderSize), 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_staging.GetBuffer(), 1, &copyRegion);
+
+    // Submit and wait
+    m_vkCore->EndSingleTimeCommands(cmd);
+
+    // ------------------------------------------------------------------
+    // Readback: HDR R16G16B16A16_SFLOAT → RGBA8 with Reinhard tonemap
+    // ------------------------------------------------------------------
+    const int pixelCount = renderSize * renderSize;
+    std::vector<unsigned char> renderPixels(static_cast<size_t>(pixelCount) * 4, 0);
+
+    void *mapped = m_staging.Map();
+    if (!mapped) {
+        INXLOG_ERROR("GPUMaterialPreview: failed to map staging buffer");
+        return false;
+    }
+
+    if (m_colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT) {
+        // HDR → sRGB RGBA8
+        const uint16_t *src = static_cast<const uint16_t *>(mapped);
+        auto halfToFloat = [](uint16_t h) -> float {
+            uint32_t sign = (h >> 15) & 0x1;
+            uint32_t exponent = (h >> 10) & 0x1F;
+            uint32_t mantissa = h & 0x3FF;
+            if (exponent == 0) {
+                if (mantissa == 0)
+                    return sign ? -0.0f : 0.0f;
+                // Subnormal
+                float val = (mantissa / 1024.0f) * std::pow(2.0f, -14.0f);
+                return sign ? -val : val;
+            }
+            if (exponent == 31)
+                return mantissa ? 0.0f : (sign ? -1e30f : 1e30f); // NaN/Inf
+            float val = std::pow(2.0f, static_cast<float>(exponent) - 15.0f) * (1.0f + mantissa / 1024.0f);
+            return sign ? -val : val;
+        };
+
+        auto linearToSrgb = [](float c) -> float {
+            if (c <= 0.0031308f)
+                return c * 12.92f;
+            return 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+        };
+
+        for (int i = 0; i < pixelCount; ++i) {
+            const int x = i % renderSize;
+            const int y = i / renderSize;
+            float r = halfToFloat(src[i * 4 + 0]);
+            float g = halfToFloat(src[i * 4 + 1]);
+            float b = halfToFloat(src[i * 4 + 2]);
+            float a = ComputePreviewCoverage(x, y, renderSize);
+
+            if (a <= 0.0f) {
+                renderPixels[i * 4 + 0] = 0;
+                renderPixels[i * 4 + 1] = 0;
+                renderPixels[i * 4 + 2] = 0;
+                renderPixels[i * 4 + 3] = 0;
+                continue;
+            }
+
+            glm::vec3 linearRgb = RemovePreviewMatte(glm::vec3(r, g, b), a);
+            r = linearRgb.r;
+            g = linearRgb.g;
+            b = linearRgb.b;
+
+            // Reinhard tonemap
+            r = r / (1.0f + r);
+            g = g / (1.0f + g);
+            b = b / (1.0f + b);
+
+            // Linear → sRGB
+            r = linearToSrgb(r);
+            g = linearToSrgb(g);
+            b = linearToSrgb(b);
+
+            renderPixels[i * 4 + 0] = static_cast<unsigned char>(std::min(std::max(r, 0.0f), 1.0f) * 255.0f + 0.5f);
+            renderPixels[i * 4 + 1] = static_cast<unsigned char>(std::min(std::max(g, 0.0f), 1.0f) * 255.0f + 0.5f);
+            renderPixels[i * 4 + 2] = static_cast<unsigned char>(std::min(std::max(b, 0.0f), 1.0f) * 255.0f + 0.5f);
+            renderPixels[i * 4 + 3] = static_cast<unsigned char>(std::min(std::max(a, 0.0f), 1.0f) * 255.0f + 0.5f);
+        }
+    } else {
+        // Fallback: assume RGBA8 or similar. Convert the exact matte clear back
+        // to transparent so Project Panel thumbnails remain visible.
+        const unsigned char *src = static_cast<const unsigned char *>(mapped);
+        const unsigned char matteR = static_cast<unsigned char>(kPreviewMatteR * 255.0f + 0.5f);
+        const unsigned char matteG = static_cast<unsigned char>(kPreviewMatteG * 255.0f + 0.5f);
+        const unsigned char matteB = static_cast<unsigned char>(kPreviewMatteB * 255.0f + 0.5f);
+
+        for (int i = 0; i < pixelCount; ++i) {
+            const int x = i % renderSize;
+            const int y = i / renderSize;
+            unsigned char r = src[i * 4 + 0];
+            unsigned char g = src[i * 4 + 1];
+            unsigned char b = src[i * 4 + 2];
+            float a = ComputePreviewCoverage(x, y, renderSize);
+
+            if (a <= 0.0f) {
+                renderPixels[i * 4 + 0] = 0;
+                renderPixels[i * 4 + 1] = 0;
+                renderPixels[i * 4 + 2] = 0;
+                renderPixels[i * 4 + 3] = 0;
+                continue;
+            }
+
+            const float rf = static_cast<float>(r) / 255.0f;
+            const float gf = static_cast<float>(g) / 255.0f;
+            const float bf = static_cast<float>(b) / 255.0f;
+            glm::vec3 linearRgb = RemovePreviewMatte(glm::vec3(rf, gf, bf), a);
+
+            renderPixels[i * 4 + 0] = static_cast<unsigned char>(std::clamp(linearRgb.r, 0.0f, 1.0f) * 255.0f + 0.5f);
+            renderPixels[i * 4 + 1] = static_cast<unsigned char>(std::clamp(linearRgb.g, 0.0f, 1.0f) * 255.0f + 0.5f);
+            renderPixels[i * 4 + 2] = static_cast<unsigned char>(std::clamp(linearRgb.b, 0.0f, 1.0f) * 255.0f + 0.5f);
+            renderPixels[i * 4 + 3] = static_cast<unsigned char>(a * 255.0f + 0.5f);
+        }
+    }
+
+    m_staging.Unmap();
+    DownsampleRGBABox(renderPixels, renderSize, size, outPixels);
+    return true;
+}
+
+// ============================================================================
+// Resource management
+// ============================================================================
+
+bool GPUMaterialPreview::EnsureResources(int size)
+{
+    // Cache format info from MaterialPipelineManager
+    auto &mpm = m_vkCore->GetMaterialPipelineManager();
+    m_colorFormat = mpm.GetColorFormat();
+    m_depthFormat = mpm.GetDepthFormat();
+    m_sampleCount = mpm.GetSampleCount();
+
+    if (m_renderPass == VK_NULL_HANDLE)
+        CreateRenderPass();
+
+    if (m_renderPass == VK_NULL_HANDLE)
+        return false;
+
+    if (!m_sphereVBO || !m_sphereIBO)
+        CreateSphereBuffers();
+
+    if (!m_sphereVBO || !m_sphereIBO)
+        return false;
+
+    if (m_currentSize != size) {
+        DestroyFramebuffer();
+        CreateFramebuffer(size);
+        m_currentSize = size;
+    }
+
+    return m_framebuffer != VK_NULL_HANDLE;
+}
+
+void GPUMaterialPreview::CreateRenderPass()
+{
+    VkDevice device = m_vkCore->GetDevice();
+
+    // Must match MaterialPipelineManager::CreateInternalRenderPass exactly
+    // for pipeline compatibility.
+    std::vector<VkAttachmentDescription> attachments;
+    std::vector<VkAttachmentReference> colorRefs;
+    VkAttachmentReference depthRef{};
+
+    // Attachment 0: MSAA color
+    VkAttachmentDescription colorAtt{};
+    colorAtt.format = m_colorFormat;
+    colorAtt.samples = m_sampleCount;
+    colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAtt.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAtt.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAtt.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachments.push_back(colorAtt);
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorRefs.push_back(colorRef);
+
+    // Attachment 1: depth
+    bool hasDepth = (m_depthFormat != VK_FORMAT_UNDEFINED);
+    if (hasDepth) {
+        VkAttachmentDescription depthAtt{};
+        depthAtt.format = m_depthFormat;
+        depthAtt.samples = m_sampleCount;
+        depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAtt.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAtt.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAtt.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachments.push_back(depthAtt);
+
+        depthRef.attachment = 1;
+        depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    }
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+    subpass.pColorAttachments = colorRefs.data();
+    subpass.pDepthStencilAttachment = hasDepth ? &depthRef : nullptr;
+    subpass.pResolveAttachments = nullptr;
+
+    // Must match MaterialPipelineManager subpass dependency for compatibility.
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    rpInfo.pAttachments = attachments.data();
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(device, &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+        INXLOG_ERROR("GPUMaterialPreview: failed to create render pass");
+        m_renderPass = VK_NULL_HANDLE;
+    }
+}
+
+void GPUMaterialPreview::CreateFramebuffer(int size)
+{
+    VkDevice device = m_vkCore->GetDevice();
+    VmaAllocator allocator = m_vkCore->GetDeviceContext().GetVmaAllocator();
+    uint32_t w = static_cast<uint32_t>(size);
+    uint32_t h = static_cast<uint32_t>(size);
+
+    // MSAA color image
+    m_msaaColor.Create(allocator, device, w, h, m_colorFormat, VK_IMAGE_TILING_OPTIMAL,
+                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_sampleCount);
+    m_msaaColor.CreateView(m_colorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    // Resolve image (1x sample, for MSAA resolve + readback)
+    if (m_sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+        m_resolveColor.Create(allocator, device, w, h, m_colorFormat, VK_IMAGE_TILING_OPTIMAL,
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_SAMPLE_COUNT_1_BIT);
+    }
+
+    // Depth image (MSAA)
+    if (m_depthFormat != VK_FORMAT_UNDEFINED) {
+        m_depth.Create(allocator, device, w, h, m_depthFormat, VK_IMAGE_TILING_OPTIMAL,
+                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_sampleCount);
+        m_depth.CreateView(m_depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+    }
+
+    // Framebuffer
+    std::vector<VkImageView> fbAttachments;
+    fbAttachments.push_back(m_msaaColor.GetView());
+    if (m_depth.IsValid())
+        fbAttachments.push_back(m_depth.GetView());
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_renderPass;
+    fbInfo.attachmentCount = static_cast<uint32_t>(fbAttachments.size());
+    fbInfo.pAttachments = fbAttachments.data();
+    fbInfo.width = w;
+    fbInfo.height = h;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_framebuffer) != VK_SUCCESS) {
+        INXLOG_ERROR("GPUMaterialPreview: failed to create framebuffer");
+        m_framebuffer = VK_NULL_HANDLE;
+        return;
+    }
+
+    // Staging buffer for readback (pixel size depends on format)
+    VkDeviceSize pixelBytes = (m_colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT) ? 8 : 4;
+    VkDeviceSize stagingSize = w * h * pixelBytes;
+    m_staging.Create(allocator, device, stagingSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+}
+
+void GPUMaterialPreview::DestroyFramebuffer()
+{
+    VkDevice device = m_vkCore->GetDevice();
+    if (m_framebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_framebuffer, nullptr);
+        m_framebuffer = VK_NULL_HANDLE;
+    }
+    m_msaaColor.Destroy();
+    m_resolveColor.Destroy();
+    m_depth.Destroy();
+    m_staging.Destroy();
+    m_currentSize = 0;
+}
+
+void GPUMaterialPreview::CreateSphereBuffers()
+{
+    const auto &vertices = PrimitiveMeshes::GetSphereVertices();
+    const auto &indices = PrimitiveMeshes::GetSphereIndices();
+
+    if (vertices.empty() || indices.empty()) {
+        INXLOG_ERROR("GPUMaterialPreview: sphere mesh is empty");
+        return;
+    }
+
+    auto &rm = m_vkCore->GetResourceManager();
+    m_sphereVBO = rm.CreateVertexBuffer(vertices.data(), vertices.size() * sizeof(Vertex));
+    m_sphereIBO = rm.CreateIndexBuffer(indices.data(), indices.size() * sizeof(uint32_t));
+    m_sphereIndexCount = static_cast<uint32_t>(indices.size());
+}
+
+} // namespace infernux

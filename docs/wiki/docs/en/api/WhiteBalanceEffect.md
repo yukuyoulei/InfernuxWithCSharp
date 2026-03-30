@@ -1,0 +1,61 @@
+# WhiteBalanceEffect
+
+<div class="class-info">
+class in <b>Infernux.renderstack</b>
+</div>
+
+**Inherits from:** [FullScreenEffect](FullScreenEffect.md)
+
+## Description
+
+URP-aligned White Balance post-processing effect.
+
+Color temperature and tint adjustment using Bradford chromatic adaptation.
+
+Attributes:
+    temperature: Warm/cool shift (-100 to 100, 0 = neutral).
+    tint: Green/magenta shift (-100 to 100, 0 = neutral).
+
+<!-- USER CONTENT START --> description
+
+<!-- USER CONTENT END -->
+
+## Properties
+
+| Name | Type | Description |
+|------|------|------|
+| name | `str` |  *(read-only)* |
+| injection_point | `str` |  *(read-only)* |
+| default_order | `int` |  *(read-only)* |
+| menu_path | `str` |  *(read-only)* |
+| temperature | `float` |  |
+| tint | `float` |  |
+
+<!-- USER CONTENT START --> properties
+
+<!-- USER CONTENT END -->
+
+## Public Methods
+
+| Method | Description |
+|------|------|
+| `get_shader_list() → List[str]` |  |
+| `setup_passes(graph: RenderGraph, bus: ResourceBus) → None` |  |
+
+<!-- USER CONTENT START --> public_methods
+
+<!-- USER CONTENT END -->
+
+## Example
+
+<!-- USER CONTENT START --> example
+```python
+# TODO: Add example for WhiteBalanceEffect
+```
+<!-- USER CONTENT END -->
+
+## See Also
+
+<!-- USER CONTENT START --> see_also
+
+<!-- USER CONTENT END -->

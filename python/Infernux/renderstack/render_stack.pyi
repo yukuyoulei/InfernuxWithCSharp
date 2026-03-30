@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+from Infernux.components.component import InxComponent
+from Infernux.renderstack.injection_point import InjectionPoint
+from Infernux.renderstack.resource_bus import ResourceBus
+
+if TYPE_CHECKING:
+    from Infernux.renderstack.render_pass import RenderPass
+    from Infernux.renderstack.render_pipeline import RenderPipeline
+
+
+@dataclass
+class PassEntry:
+    """Entry associating a render pass with its enabled state and order."""
+
+    render_pass: RenderPass
+    enabled: bool = ...
+    order: int = ...
+
+
+class RenderStack(InxComponent):
+    """Component that manages a stack of render passes driven by a pipeline."""
+
+    pipeline_class_name: str
+    mounted_passes_json: str
+    pipeline_params_json: str
+
+    @classmethod
+    def instance(cls) -> Optional[RenderStack]:
+        """Return the current active RenderStack, or None."""
+        ...
+
+    def awake(self) -> None:
+        """Initialize the render stack on component awake."""
+        ...
+    def on_destroy(self) -> None:
+        """Clean up the render stack when the component is destroyed."""
+        ...
+
+    @staticmethod
+    def discover_pipelines() -> Dict[str, type]:
+        """Discover all available render pipeline classes."""
+        ...
+    def set_pipeline(self, pipeline_class_name: str) -> None:
+        """Set the active render pipeline by class name."""
+        ...
+
+    @property
+    def pipeline(self) -> RenderPipeline:
+        """The currently active render pipeline."""
+        ...
+    @property
+    def injection_points(self) -> List[InjectionPoint]:
+        """List of injection points defined by the pipeline."""
+        ...
+    @property
+    def pass_entries(self) -> List[PassEntry]:
+        """All mounted render pass entries."""
+        ...
+
+    def add_pass(self, render_pass: RenderPass) -> bool:
+        """Add a render pass to the stack. Returns True on success."""
+        ...
+    def remove_pass(self, pass_name: str) -> bool:
+        """Remove a render pass by name. Returns True if found."""
+        ...
+    def set_pass_enabled(self, pass_name: str, enabled: bool) -> None:
+        """Enable or disable a render pass by name."""
+        ...
+    def reorder_pass(self, pass_name: str, new_order: int) -> None:
+        """Change the execution order of a render pass."""
+        ...
+    def move_pass_before(self, dragged_name: str, target_name: str) -> None:
+        """Move a render pass to execute before another pass."""
+        ...
+    def get_passes_at(self, injection_point: str) -> List[PassEntry]:
+        """Get all pass entries at a specific injection point."""
+        ...
+
+    def invalidate_graph(self) -> None:
+        """Mark the render graph as dirty, triggering a rebuild."""
+        ...
+    def build_graph(self) -> Any:
+        """Build and return the render graph description."""
+        ...
+    def render(self, context: Any, camera: Any) -> None:
+        """Execute the render stack for a camera."""
+        ...
+
+    def on_enable(self) -> None:
+        """Called when the component is enabled."""
+        ...
+    def on_disable(self) -> None:
+        """Called when the component is disabled."""
+        ...
+    def on_before_serialize(self) -> None:
+        """Serialize render stack state before saving."""
+        ...
+    def on_after_deserialize(self) -> None:
+        """Restore render stack state after loading."""
+        ...
+
+
+__all__ = [
+    "PassEntry",
+    "RenderStack",
+]

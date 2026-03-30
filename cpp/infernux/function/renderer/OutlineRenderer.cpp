@@ -1,0 +1,1228 @@
+/**
+ * @file OutlineRenderer.cpp
+ * @brief Post-process selection outline renderer implementation
+ *
+ * Extracted from InxVkCoreModular.cpp (Phase 1 refactoring).
+ */
+
+#include "OutlineRenderer.h"
+#include "InxVkCoreModular.h"
+#include "MaterialDescriptor.h"
+#include "MaterialPipelineManager.h"
+#include "SceneRenderTarget.h"
+#include "shader/ShaderProgram.h"
+#include <function/resources/InxMaterial/InxMaterial.h>
+
+#include <core/error/InxError.h>
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <vk_mem_alloc.h>
+
+#include <array>
+#include <cstring>
+
+namespace infernux
+{
+
+// ============================================================================
+// Destructor
+// ============================================================================
+
+OutlineRenderer::~OutlineRenderer()
+{
+    Cleanup();
+}
+
+// ============================================================================
+// Lifecycle
+// ============================================================================
+
+bool OutlineRenderer::Initialize(InxVkCoreModular *core, SceneRenderTarget *sceneTarget)
+{
+    if (m_resourcesReady)
+        return true;
+
+    if (!core || !sceneTarget || !sceneTarget->IsReady()) {
+        INXLOG_WARN("OutlineRenderer::Initialize: core or SceneRenderTarget not ready");
+        return false;
+    }
+
+    m_core = core;
+    m_sceneRenderTarget = sceneTarget;
+
+    // Check if outline shaders are loaded
+    if (!m_core->HasShader("outline_mask", "vertex") || !m_core->HasShader("outline_mask", "fragment") ||
+        !m_core->HasShader("outline_composite", "vertex") || !m_core->HasShader("outline_composite", "fragment")) {
+        INXLOG_WARN("OutlineRenderer::Initialize: outline shaders not loaded yet");
+        return false;
+    }
+
+    CreateOutlineMaskRenderPass();
+    CreateOutlineCompositeRenderPass();
+    CreateOutlineFramebuffers();
+    CreateOutlineDescriptorResources();
+    CreateOutlinePipelines();
+    CreateOutlineMaterialResources();
+
+    m_resourcesReady = true;
+    INXLOG_INFO("OutlineRenderer: post-process outline resources initialized");
+    return true;
+}
+
+void OutlineRenderer::Cleanup()
+{
+    VkDevice device = m_core ? m_core->GetDevice() : VK_NULL_HANDLE;
+    if (device == VK_NULL_HANDLE)
+        return;
+
+    if (!m_core->IsShuttingDown()) {
+        m_core->GetDeviceContext().WaitIdle();
+    }
+
+    if (m_outlineMaskPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_outlineMaskPipeline, nullptr);
+        m_outlineMaskPipeline = VK_NULL_HANDLE;
+    }
+    if (m_outlineMaskPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_outlineMaskPipelineLayout, nullptr);
+        m_outlineMaskPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineCompositePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_outlineCompositePipeline, nullptr);
+        m_outlineCompositePipeline = VK_NULL_HANDLE;
+    }
+    if (m_outlineCompositePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_outlineCompositePipelineLayout, nullptr);
+        m_outlineCompositePipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineMaskDescSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_outlineMaskDescSetLayout, nullptr);
+        m_outlineMaskDescSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineCompositeDescSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_outlineCompositeDescSetLayout, nullptr);
+        m_outlineCompositeDescSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineDescPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_outlineDescPool, nullptr);
+        m_outlineDescPool = VK_NULL_HANDLE;
+    }
+
+    // Per-material outline resources
+    for (auto &[key, pipeline] : m_perMtlOutlinePipelines) {
+        if (pipeline != VK_NULL_HANDLE)
+            vkDestroyPipeline(device, pipeline, nullptr);
+    }
+    m_perMtlOutlinePipelines.clear();
+    m_perMtlOutlineDescSets.clear(); // freed with pool below
+    m_outlineGlobalsDescSets.clear();
+
+    VmaAllocator allocator = m_core->GetDeviceContext().GetVmaAllocator();
+    for (auto &instBuf : m_outlineInstanceBufs) {
+        if (instBuf.buffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, instBuf.buffer, instBuf.allocation);
+    }
+    m_outlineInstanceBufs.clear();
+
+    if (m_outlineMtlDescPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device, m_outlineMtlDescPool, nullptr);
+        m_outlineMtlDescPool = VK_NULL_HANDLE;
+    }
+    if (m_outlineMtlPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_outlineMtlPipelineLayout, nullptr);
+        m_outlineMtlPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineMtlSet0Layout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_outlineMtlSet0Layout, nullptr);
+        m_outlineMtlSet0Layout = VK_NULL_HANDLE;
+    }
+    if (m_emptyDescSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, m_emptyDescSetLayout, nullptr);
+        m_emptyDescSetLayout = VK_NULL_HANDLE;
+    }
+    if (m_outlineMaskFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_outlineMaskFramebuffer, nullptr);
+        m_outlineMaskFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_outlineCompositeFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_outlineCompositeFramebuffer, nullptr);
+        m_outlineCompositeFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_outlineMaskRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_outlineMaskRenderPass, nullptr);
+        m_outlineMaskRenderPass = VK_NULL_HANDLE;
+    }
+    if (m_outlineCompositeRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_outlineCompositeRenderPass, nullptr);
+        m_outlineCompositeRenderPass = VK_NULL_HANDLE;
+    }
+
+    m_outlineMaskDescSet = VK_NULL_HANDLE;
+    m_outlineCompositeDescSet = VK_NULL_HANDLE;
+    m_resourcesReady = false;
+}
+
+void OutlineRenderer::OnResize(uint32_t width, uint32_t height)
+{
+    if (!m_resourcesReady)
+        return;
+
+    VkDevice device = m_core->GetDevice();
+    m_core->GetDeviceContext().WaitIdle();
+
+    // Destroy old framebuffers
+    if (m_outlineMaskFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_outlineMaskFramebuffer, nullptr);
+        m_outlineMaskFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_outlineCompositeFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, m_outlineCompositeFramebuffer, nullptr);
+        m_outlineCompositeFramebuffer = VK_NULL_HANDLE;
+    }
+
+    CreateOutlineFramebuffers();
+
+    // Update composite descriptor set with new mask image view
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = m_sceneRenderTarget->GetOutlineMaskSampler();
+    imageInfo.imageView = m_sceneRenderTarget->GetOutlineMaskImageView();
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_outlineCompositeDescSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
+// ============================================================================
+// Rendering
+// ============================================================================
+
+bool OutlineRenderer::RecordCommands(VkCommandBuffer cmdBuf, const std::vector<DrawCall> &drawCalls)
+{
+    if (!m_resourcesReady || m_outlineObjectId == 0 || !m_sceneRenderTarget)
+        return false;
+
+    RenderOutlineMask(cmdBuf, drawCalls);
+    RenderOutlineComposite(cmdBuf);
+    return true;
+}
+
+void OutlineRenderer::RecordNoOutlineBarrier(VkCommandBuffer cmdBuf)
+{
+    (void)cmdBuf;
+}
+
+// ============================================================================
+// Internal: Vulkan Resource Creation
+// ============================================================================
+
+void OutlineRenderer::CreateOutlineMaskRenderPass()
+{
+    // Single color attachment: mask (R8G8B8A8_UNORM, clear to black, store for later sampling).
+    // No depth attachment — the SceneRenderTarget depth is NOT shared with the scene RenderGraph
+    // (it creates a transient depth internally), so we cannot do occlusion testing.
+    // This matches Blender behavior: selection outline is always visible (X-ray).
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = nullptr; // No depth
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &colorAttachment;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_core->GetDevice(), &rpInfo, nullptr, &m_outlineMaskRenderPass) != VK_SUCCESS) {
+        INXLOG_ERROR("OutlineRenderer: Failed to create outline mask render pass");
+    }
+}
+
+void OutlineRenderer::CreateOutlineCompositeRenderPass()
+{
+    // Single color attachment: scene color (load existing, alpha-blend outline on top)
+    // Must match SceneRenderTarget HDR color format (R16G16B16A16_SFLOAT).
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // Preserve scene color
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    std::array<VkSubpassDependency, 2> dependencies{};
+
+    // Synchronize both scene-color reuse and outline-mask sampling at pass begin.
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[0].dstStageMask =
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[0].srcAccessMask =
+        VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[0].dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+    // Make the composited scene image visible to downstream sampling (ImGui).
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &colorAttachment;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    rpInfo.pDependencies = dependencies.data();
+
+    if (vkCreateRenderPass(m_core->GetDevice(), &rpInfo, nullptr, &m_outlineCompositeRenderPass) != VK_SUCCESS) {
+        INXLOG_ERROR("OutlineRenderer: Failed to create outline composite render pass");
+    }
+}
+
+void OutlineRenderer::CreateOutlineFramebuffers()
+{
+    uint32_t w = m_sceneRenderTarget->GetWidth();
+    uint32_t h = m_sceneRenderTarget->GetHeight();
+
+    // Mask framebuffer: mask color only (no depth — always-visible outline)
+    {
+        VkImageView attachment = m_sceneRenderTarget->GetOutlineMaskImageView();
+
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_outlineMaskRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &attachment;
+        fbInfo.width = w;
+        fbInfo.height = h;
+        fbInfo.layers = 1;
+
+        if (vkCreateFramebuffer(m_core->GetDevice(), &fbInfo, nullptr, &m_outlineMaskFramebuffer) != VK_SUCCESS) {
+            INXLOG_ERROR("OutlineRenderer: Failed to create outline mask framebuffer");
+        }
+    }
+
+    // Composite framebuffer: scene color
+    {
+        VkImageView attachment = m_sceneRenderTarget->GetColorImageView();
+
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_outlineCompositeRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &attachment;
+        fbInfo.width = w;
+        fbInfo.height = h;
+        fbInfo.layers = 1;
+
+        if (vkCreateFramebuffer(m_core->GetDevice(), &fbInfo, nullptr, &m_outlineCompositeFramebuffer) != VK_SUCCESS) {
+            INXLOG_ERROR("OutlineRenderer: Failed to create outline composite framebuffer");
+        }
+    }
+}
+
+void OutlineRenderer::CreateOutlineDescriptorResources()
+{
+    VkDevice device = m_core->GetDevice();
+
+    // --- Descriptor pool (2 sets: mask UBO + composite sampler) ---
+    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[0].descriptorCount = 1;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[1].descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = 2;
+
+    if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_outlineDescPool) != VK_SUCCESS) {
+        INXLOG_ERROR("OutlineRenderer: Failed to create outline descriptor pool");
+        return;
+    }
+
+    // --- Mask descriptor set layout: binding 0 = UBO (scene VP matrices) ---
+    {
+        VkDescriptorSetLayoutBinding uboBinding{};
+        uboBinding.binding = 0;
+        uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboBinding.descriptorCount = 1;
+        uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &uboBinding;
+
+        vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_outlineMaskDescSetLayout);
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_outlineDescPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_outlineMaskDescSetLayout;
+
+        vkAllocateDescriptorSets(device, &allocInfo, &m_outlineMaskDescSet);
+
+        // Write scene UBO to binding 0
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_core->GetUniformBuffer(0);
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(UniformBufferObject);
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_outlineMaskDescSet;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.pBufferInfo = &bufferInfo;
+
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+
+    // --- Composite descriptor set layout: binding 0 = sampler (mask texture) ---
+    {
+        VkDescriptorSetLayoutBinding samplerBinding{};
+        samplerBinding.binding = 0;
+        samplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerBinding.descriptorCount = 1;
+        samplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &samplerBinding;
+
+        vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_outlineCompositeDescSetLayout);
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_outlineDescPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_outlineCompositeDescSetLayout;
+
+        vkAllocateDescriptorSets(device, &allocInfo, &m_outlineCompositeDescSet);
+
+        // Write mask texture to binding 0
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.sampler = m_sceneRenderTarget->GetOutlineMaskSampler();
+        imageInfo.imageView = m_sceneRenderTarget->GetOutlineMaskImageView();
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_outlineCompositeDescSet;
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfo;
+
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+}
+
+void OutlineRenderer::CreateOutlinePipelines()
+{
+    VkDevice device = m_core->GetDevice();
+
+    // ========================================================================
+    // Mask Pipeline — renders selected object as white silhouette
+    // ========================================================================
+    {
+        // Pipeline layout: 1 descriptor set (UBO at binding 0) + push constants (128 bytes, vertex)
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.offset = 0;
+        pushRange.size = 128; // 2 x mat4
+
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &m_outlineMaskDescSetLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushRange;
+
+        vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_outlineMaskPipelineLayout);
+
+        // Shader stages
+        VkPipelineShaderStageCreateInfo vertStage{};
+        vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vertStage.module = m_core->GetShaderModule("outline_mask", "vertex");
+        vertStage.pName = "main";
+
+        VkPipelineShaderStageCreateInfo fragStage{};
+        fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStage.module = m_core->GetShaderModule("outline_mask", "fragment");
+        fragStage.pName = "main";
+
+        std::array<VkPipelineShaderStageCreateInfo, 2> stages = {vertStage, fragStage};
+
+        // Vertex input: same as scene mesh (Vertex struct)
+        auto bindingDesc = Vertex::getBindingDescription();
+        auto attrDescs = Vertex::getAttributeDescriptions();
+
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.pVertexBindingDescriptions = &bindingDesc;
+        vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
+        vertexInput.pVertexAttributeDescriptions = attrDescs.data();
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // Viewport + scissor (dynamic)
+        VkPipelineDynamicStateCreateInfo dynamicState{};
+        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        std::array<VkDynamicState, 2> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        dynamicState.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
+        dynamicState.pDynamicStates = dynStates.data();
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        // Rasterization: no culling — supports all mesh winding orders
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.lineWidth = 1.0f;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+        // No depth test — scene depth not shared, outline is always visible (like Blender)
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_FALSE;
+        depthStencil.depthWriteEnable = VK_FALSE;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineColorBlendAttachmentState colorBlendAttach{};
+        colorBlendAttach.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttach.blendEnable = VK_FALSE;
+
+        VkPipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlend.attachmentCount = 1;
+        colorBlend.pAttachments = &colorBlendAttach;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
+        pipelineInfo.pStages = stages.data();
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamicState;
+        pipelineInfo.layout = m_outlineMaskPipelineLayout;
+        pipelineInfo.renderPass = m_outlineMaskRenderPass;
+        pipelineInfo.subpass = 0;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_outlineMaskPipeline) !=
+            VK_SUCCESS) {
+            INXLOG_ERROR("OutlineRenderer: Failed to create outline mask pipeline");
+        }
+    }
+
+    // ========================================================================
+    // Composite Pipeline — fullscreen edge detection + alpha blend
+    // ========================================================================
+    {
+        // Pipeline layout: 1 descriptor set (sampler at binding 0) + push constants (32 bytes, fragment)
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRange.offset = 0;
+        pushRange.size = 32; // vec4 color + vec2 texelSize + float width + float padding
+
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &m_outlineCompositeDescSetLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushRange;
+
+        vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_outlineCompositePipelineLayout);
+
+        // Shader stages
+        VkPipelineShaderStageCreateInfo vertStage{};
+        vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vertStage.module = m_core->GetShaderModule("outline_composite", "vertex");
+        vertStage.pName = "main";
+
+        VkPipelineShaderStageCreateInfo fragStage{};
+        fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStage.module = m_core->GetShaderModule("outline_composite", "fragment");
+        fragStage.pName = "main";
+
+        std::array<VkPipelineShaderStageCreateInfo, 2> stages = {vertStage, fragStage};
+
+        // No vertex input (fullscreen triangle is procedural)
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // Viewport + scissor (dynamic)
+        VkPipelineDynamicStateCreateInfo dynamicState{};
+        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        std::array<VkDynamicState, 2> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        dynamicState.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
+        dynamicState.pDynamicStates = dynStates.data();
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
+
+        // Rasterization: no culling for fullscreen triangle
+        VkPipelineRasterizationStateCreateInfo raster{};
+        raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.lineWidth = 1.0f;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+        // No depth test
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_FALSE;
+        depthStencil.depthWriteEnable = VK_FALSE;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        // Alpha blending for outline compositing
+        VkPipelineColorBlendAttachmentState colorBlendAttach{};
+        colorBlendAttach.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttach.blendEnable = VK_TRUE;
+        colorBlendAttach.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        colorBlendAttach.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        colorBlendAttach.colorBlendOp = VK_BLEND_OP_ADD;
+        colorBlendAttach.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        colorBlendAttach.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttach.alphaBlendOp = VK_BLEND_OP_ADD;
+
+        VkPipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlend.attachmentCount = 1;
+        colorBlend.pAttachments = &colorBlendAttach;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
+        pipelineInfo.pStages = stages.data();
+        pipelineInfo.pVertexInputState = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &raster;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.pColorBlendState = &colorBlend;
+        pipelineInfo.pDynamicState = &dynamicState;
+        pipelineInfo.layout = m_outlineCompositePipelineLayout;
+        pipelineInfo.renderPass = m_outlineCompositeRenderPass;
+        pipelineInfo.subpass = 0;
+
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_outlineCompositePipeline) !=
+            VK_SUCCESS) {
+            INXLOG_ERROR("OutlineRenderer: Failed to create outline composite pipeline");
+        }
+    }
+}
+
+// ============================================================================
+// Per-material outline mask pipeline resources
+// ============================================================================
+
+void OutlineRenderer::CreateOutlineMaterialResources()
+{
+    VkDevice device = m_core->GetDevice();
+    VmaAllocator allocator = m_core->GetDeviceContext().GetVmaAllocator();
+    uint32_t framesInFlight = m_core->GetMaxFramesInFlight();
+
+    // --- Set 0 layout: binding 0 (scene UBO, vertex) + binding 14 (vert material UBO, vertex) ---
+    {
+        VkDescriptorSetLayoutBinding bindings[2]{};
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+        bindings[1].binding = 14;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 2;
+        layoutInfo.pBindings = bindings;
+
+        vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_outlineMtlSet0Layout);
+    }
+
+    // --- Empty set 1 layout placeholder ---
+    {
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 0;
+        layoutInfo.pBindings = nullptr;
+
+        vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_emptyDescSetLayout);
+    }
+
+    // --- Pipeline layout: [set0, emptySet1, globalsSet2] + push constants ---
+    {
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.offset = 0;
+        pushRange.size = 128; // 2 x mat4
+
+        VkDescriptorSetLayout setLayouts[3] = {m_outlineMtlSet0Layout, m_emptyDescSetLayout,
+                                               m_core->GetGlobalsDescSetLayout()};
+
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 3;
+        layoutInfo.pSetLayouts = setLayouts;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushRange;
+
+        vkCreatePipelineLayout(device, &layoutInfo, nullptr, &m_outlineMtlPipelineLayout);
+    }
+
+    // --- Descriptor pool (per-material set 0 + per-frame globals set 2) ---
+    {
+        VkDescriptorPoolSize poolSizes[2]{};
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = 64 + framesInFlight; // 32 materials × 2 bindings + globals UBOs
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSizes[1].descriptorCount = framesInFlight; // instance SSBOs
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets = 32 + framesInFlight;
+        poolInfo.poolSizeCount = 2;
+        poolInfo.pPoolSizes = poolSizes;
+
+        vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_outlineMtlDescPool);
+    }
+
+    // --- Per-frame outline instance buffers (1 mat4 each, host-visible) ---
+    m_outlineInstanceBufs.resize(framesInFlight);
+    for (uint32_t i = 0; i < framesInFlight; ++i) {
+        VkBufferCreateInfo bufInfo{};
+        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufInfo.size = sizeof(glm::mat4);
+        bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocCreateInfo{};
+        allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+        VmaAllocationInfo vmaAllocInfo{};
+        vmaCreateBuffer(allocator, &bufInfo, &allocCreateInfo, &m_outlineInstanceBufs[i].buffer,
+                        &m_outlineInstanceBufs[i].allocation, &vmaAllocInfo);
+        m_outlineInstanceBufs[i].mapped = vmaAllocInfo.pMappedData;
+
+        // Write identity as initial value
+        glm::mat4 identity(1.0f);
+        std::memcpy(m_outlineInstanceBufs[i].mapped, &identity, sizeof(glm::mat4));
+    }
+
+    // --- Per-frame outline globals descriptor sets ---
+    {
+        VkDescriptorSetLayout globalsLayout = m_core->GetGlobalsDescSetLayout();
+        std::vector<VkDescriptorSetLayout> layouts(framesInFlight, globalsLayout);
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_outlineMtlDescPool;
+        allocInfo.descriptorSetCount = framesInFlight;
+        allocInfo.pSetLayouts = layouts.data();
+
+        m_outlineGlobalsDescSets.resize(framesInFlight);
+        vkAllocateDescriptorSets(device, &allocInfo, m_outlineGlobalsDescSets.data());
+
+        for (uint32_t i = 0; i < framesInFlight; ++i) {
+            VkWriteDescriptorSet writes[2]{};
+
+            // Binding 0: globals UBO (same as engine frame i)
+            VkDescriptorBufferInfo uboBufInfo{};
+            uboBufInfo.buffer = m_core->GetGlobalsBuffer(i);
+            uboBufInfo.offset = 0;
+            uboBufInfo.range = VK_WHOLE_SIZE;
+
+            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet = m_outlineGlobalsDescSets[i];
+            writes[0].dstBinding = 0;
+            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[0].descriptorCount = 1;
+            writes[0].pBufferInfo = &uboBufInfo;
+
+            // Binding 1: outline instance buffer (1 mat4)
+            VkDescriptorBufferInfo ssboBufInfo{};
+            ssboBufInfo.buffer = m_outlineInstanceBufs[i].buffer;
+            ssboBufInfo.offset = 0;
+            ssboBufInfo.range = sizeof(glm::mat4);
+
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = m_outlineGlobalsDescSets[i];
+            writes[1].dstBinding = 1;
+            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[1].descriptorCount = 1;
+            writes[1].pBufferInfo = &ssboBufInfo;
+
+            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+        }
+    }
+
+    INXLOG_INFO("OutlineRenderer: per-material outline resources created");
+}
+
+VkPipeline OutlineRenderer::GetOrCreateMtlOutlinePipeline(InxMaterial *material)
+{
+    std::string key = material->GetMaterialKey();
+    if (key.empty())
+        key = material->GetName();
+
+    auto it = m_perMtlOutlinePipelines.find(key);
+    if (it != m_perMtlOutlinePipelines.end())
+        return it->second;
+
+    ShaderProgram *program = material->GetPassShaderProgram(ShaderCompileTarget::Forward);
+    if (!program)
+        return VK_NULL_HANDLE;
+
+    VkShaderModule vertModule = program->GetVertexModule();
+    VkShaderModule fragModule = m_core->GetShaderModule("outline_mask", "fragment");
+    if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
+        return VK_NULL_HANDLE;
+
+    VkDevice device = m_core->GetDevice();
+
+    // Shader stages
+    VkPipelineShaderStageCreateInfo vertStage{};
+    vertStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertStage.module = vertModule;
+    vertStage.pName = "main";
+
+    VkPipelineShaderStageCreateInfo fragStage{};
+    fragStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragStage.module = fragModule;
+    fragStage.pName = "main";
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages = {vertStage, fragStage};
+
+    // Vertex input (same as scene mesh)
+    auto bindingDesc = Vertex::getBindingDescription();
+    auto attrDescs = Vertex::getAttributeDescriptions();
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrDescs.size());
+    vertexInput.pVertexAttributeDescriptions = attrDescs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    std::array<VkDynamicState, 2> dynStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynStates.size());
+    dynamicState.pDynamicStates = dynStates.data();
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo raster{};
+    raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.lineWidth = 1.0f;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttach{};
+    colorBlendAttach.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttach.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &colorBlendAttach;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
+    pipelineInfo.pStages = stages.data();
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &raster;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_outlineMtlPipelineLayout;
+    pipelineInfo.renderPass = m_outlineMaskRenderPass;
+    pipelineInfo.subpass = 0;
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+        INXLOG_WARN("OutlineRenderer: Failed to create per-material outline pipeline for '", material->GetName(), "'");
+        return VK_NULL_HANDLE;
+    }
+
+    m_perMtlOutlinePipelines[key] = pipeline;
+    INXLOG_DEBUG("OutlineRenderer: Created per-material outline pipeline for '", material->GetName(), "'");
+    return pipeline;
+}
+
+VkDescriptorSet OutlineRenderer::GetOrCreateMtlOutlineDescSet(InxMaterial *material)
+{
+    std::string key = material->GetMaterialKey();
+    if (key.empty())
+        key = material->GetName();
+
+    auto it = m_perMtlOutlineDescSets.find(key);
+    if (it != m_perMtlOutlineDescSets.end())
+        return it->second;
+
+    // Get forward render data to access the vertex material UBO buffer
+    MaterialRenderData *renderData = m_core->GetMaterialPipelineManager().GetRenderData(key);
+    if (!renderData || !renderData->materialDescSet || !renderData->materialDescSet->vertexMaterialUBO ||
+        !renderData->materialDescSet->vertexMaterialUBO->IsValid()) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkDevice device = m_core->GetDevice();
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_outlineMtlDescPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_outlineMtlSet0Layout;
+
+    VkDescriptorSet descSet = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(device, &allocInfo, &descSet) != VK_SUCCESS) {
+        INXLOG_WARN("OutlineRenderer: Failed to allocate per-material outline descriptor set");
+        return VK_NULL_HANDLE;
+    }
+
+    VkWriteDescriptorSet writes[2]{};
+
+    // Binding 0: scene UBO (same as the fixed outline mask)
+    VkDescriptorBufferInfo sceneBufInfo{};
+    sceneBufInfo.buffer = m_core->GetUniformBuffer(0);
+    sceneBufInfo.offset = 0;
+    sceneBufInfo.range = sizeof(UniformBufferObject);
+
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = descSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].descriptorCount = 1;
+    writes[0].pBufferInfo = &sceneBufInfo;
+
+    // Binding 14: vertex material UBO
+    VkDescriptorBufferInfo vertMatBufInfo{};
+    vertMatBufInfo.buffer = renderData->materialDescSet->vertexMaterialUBO->GetBuffer();
+    vertMatBufInfo.offset = 0;
+    vertMatBufInfo.range = renderData->materialDescSet->vertexMaterialUBO->GetSize();
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = descSet;
+    writes[1].dstBinding = 14;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[1].descriptorCount = 1;
+    writes[1].pBufferInfo = &vertMatBufInfo;
+
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+
+    m_perMtlOutlineDescSets[key] = descSet;
+    return descSet;
+}
+
+// ============================================================================
+// Internal: Mask Pass
+// ============================================================================
+
+void OutlineRenderer::RenderOutlineMask(VkCommandBuffer cmdBuf, const std::vector<DrawCall> &drawCalls)
+{
+    uint32_t w = m_sceneRenderTarget->GetWidth();
+    uint32_t h = m_sceneRenderTarget->GetHeight();
+
+    // Begin mask render pass (clears mask to black, no depth)
+    VkClearValue clearValue{};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_outlineMaskRenderPass;
+    rpBegin.framebuffer = m_outlineMaskFramebuffer;
+    rpBegin.renderArea.offset = {0, 0};
+    rpBegin.renderArea.extent = {w, h};
+    rpBegin.clearValueCount = 1;
+    rpBegin.pClearValues = &clearValue;
+
+    vkCmdBeginRenderPass(cmdBuf, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Set viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(w);
+    viewport.height = static_cast<float>(h);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmdBuf, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {w, h};
+    vkCmdSetScissor(cmdBuf, 0, 1, &scissor);
+
+    // Render the selected object
+    for (const auto &dc : drawCalls) {
+        if (dc.objectId != m_outlineObjectId)
+            continue;
+
+        // Get per-object buffer via core accessor
+        VkBuffer vertBuf = m_core->GetObjectVertexBuffer(dc.objectId);
+        VkBuffer idxBuf = m_core->GetObjectIndexBuffer(dc.objectId);
+
+        if (vertBuf == VK_NULL_HANDLE || idxBuf == VK_NULL_HANDLE)
+            continue;
+
+        VkBuffer vertBuffers[] = {vertBuf};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmdBuf, 0, 1, vertBuffers, offsets);
+        vkCmdBindIndexBuffer(cmdBuf, idxBuf, 0, VK_INDEX_TYPE_UINT32);
+
+        // Push per-object model matrix + normal matrix
+        struct PushConstants
+        {
+            glm::mat4 model;
+            glm::mat4 normalMat;
+        };
+
+        PushConstants pushData;
+        pushData.model = dc.worldMatrix;
+        glm::mat3 normalMat3 = glm::transpose(glm::inverse(glm::mat3(dc.worldMatrix)));
+        pushData.normalMat = glm::mat4(normalMat3);
+
+        // Check if the material has a custom vertex shader with vertex deformation
+        bool usePerMaterialPipeline = false;
+        if (dc.material) {
+            ShaderProgram *fwdProgram = dc.material->GetPassShaderProgram(ShaderCompileTarget::Forward);
+            if (fwdProgram && fwdProgram->HasVertexMaterialUBO()) {
+                VkPipeline mtlPipeline = GetOrCreateMtlOutlinePipeline(dc.material.get());
+                VkDescriptorSet mtlDescSet = GetOrCreateMtlOutlineDescSet(dc.material.get());
+
+                if (mtlPipeline != VK_NULL_HANDLE && mtlDescSet != VK_NULL_HANDLE) {
+                    // Write the object's world transform to the per-frame instance buffer
+                    uint32_t frameIdx =
+                        m_core->GetSwapchain().GetCurrentFrame() % static_cast<uint32_t>(m_outlineInstanceBufs.size());
+                    std::memcpy(m_outlineInstanceBufs[frameIdx].mapped, &dc.worldMatrix, sizeof(glm::mat4));
+
+                    // Bind per-material pipeline
+                    vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, mtlPipeline);
+
+                    // Set 0: scene UBO + vertex material UBO
+                    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineMtlPipelineLayout, 0, 1,
+                                            &mtlDescSet, 0, nullptr);
+
+                    // Set 2: outline globals (globals UBO + outline instance buffer)
+                    VkDescriptorSet globalsDescSet = m_outlineGlobalsDescSets[frameIdx];
+                    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineMtlPipelineLayout, 2, 1,
+                                            &globalsDescSet, 0, nullptr);
+
+                    vkCmdPushConstants(cmdBuf, m_outlineMtlPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                       sizeof(PushConstants), &pushData);
+
+                    // Draw with firstInstance=0 so gl_InstanceIndex=0 reads instanceModels[0]
+                    vkCmdDrawIndexed(cmdBuf, dc.indexCount, 1, dc.indexStart, 0, 0);
+                    usePerMaterialPipeline = true;
+                }
+            }
+        }
+
+        // Fallback: original fixed outline mask pipeline (no vertex deformation)
+        if (!usePerMaterialPipeline) {
+            vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineMaskPipeline);
+            vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineMaskPipelineLayout, 0, 1,
+                                    &m_outlineMaskDescSet, 0, nullptr);
+            vkCmdPushConstants(cmdBuf, m_outlineMaskPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(PushConstants), &pushData);
+            vkCmdDrawIndexed(cmdBuf, dc.indexCount, 1, dc.indexStart, 0, 0);
+        }
+    }
+
+    vkCmdEndRenderPass(cmdBuf);
+}
+
+// ============================================================================
+// Internal: Composite Pass
+// ============================================================================
+
+void OutlineRenderer::RenderOutlineComposite(VkCommandBuffer cmdBuf)
+{
+    uint32_t w = m_sceneRenderTarget->GetWidth();
+    uint32_t h = m_sceneRenderTarget->GetHeight();
+
+    // Begin composite render pass
+    VkClearValue dummyClear{};
+    dummyClear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+    VkRenderPassBeginInfo rpBegin{};
+    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpBegin.renderPass = m_outlineCompositeRenderPass;
+    rpBegin.framebuffer = m_outlineCompositeFramebuffer;
+    rpBegin.renderArea.offset = {0, 0};
+    rpBegin.renderArea.extent = {w, h};
+    rpBegin.clearValueCount = 1;
+    rpBegin.pClearValues = &dummyClear;
+
+    vkCmdBeginRenderPass(cmdBuf, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Set viewport and scissor
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(w);
+    viewport.height = static_cast<float>(h);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmdBuf, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {w, h};
+    vkCmdSetScissor(cmdBuf, 0, 1, &scissor);
+
+    // Bind composite pipeline
+    vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineCompositePipeline);
+
+    // Bind composite descriptor set (mask texture sampler)
+    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineCompositePipelineLayout, 0, 1,
+                            &m_outlineCompositeDescSet, 0, nullptr);
+
+    // Push constants: outline color, texel size, outline width
+    struct CompositePushConstants
+    {
+        glm::vec4 outlineColor;
+        glm::vec2 texelSize;
+        float outlineWidth;
+        float _padding;
+    };
+
+    CompositePushConstants pushData;
+    pushData.outlineColor = m_outlineColor;
+    pushData.texelSize = glm::vec2(1.0f / static_cast<float>(w), 1.0f / static_cast<float>(h));
+    pushData.outlineWidth = m_outlinePixelWidth;
+    pushData._padding = 0.0f;
+
+    vkCmdPushConstants(cmdBuf, m_outlineCompositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(CompositePushConstants), &pushData);
+
+    // Draw fullscreen triangle (3 vertices, no vertex buffer)
+    vkCmdDraw(cmdBuf, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(cmdBuf);
+}
+
+} // namespace infernux
