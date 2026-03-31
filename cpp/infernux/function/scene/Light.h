@@ -183,7 +183,7 @@ class Light : public Component
     }
     void SetShadowBias(float bias)
     {
-        m_shadowBias = bias;
+        m_shadowBias = bias * 0.1f;
     }
 
     [[nodiscard]] float GetShadowNormalBias() const

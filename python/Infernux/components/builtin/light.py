@@ -189,7 +189,7 @@ class Light(BuiltinComponent):
         "shadow_bias",
         FieldType.FLOAT,
             default=0.0,
-        range=(0.0, 0.1),
+        range=(0.0, 1),
         visible_when=lambda comp: int(comp.shadows) > 0,
         tooltip="Shadow depth bias",
     )
