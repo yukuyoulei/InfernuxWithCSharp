@@ -6,11 +6,11 @@
 #include "FullscreenRenderer.h"
 #include "InxVkCoreModular.h"
 #include "shader/ShaderProgram.h"
-#include <algorithm>
-#include <core/config/EngineConfig.h>
 #include "vk/VkDeviceContext.h"
 #include "vk/VkPipelineManager.h"
 #include "vk/VkSwapchainManager.h"
+#include <algorithm>
+#include <core/config/EngineConfig.h>
 #include <core/error/InxError.h>
 
 namespace infernux

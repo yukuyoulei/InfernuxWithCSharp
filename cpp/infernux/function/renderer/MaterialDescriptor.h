@@ -308,10 +308,10 @@ class MaterialDescriptorManager
     [[nodiscard]] bool IsNormalBindingName(std::string_view bindingName) const;
 
     [[nodiscard]] bool TryGetDefaultTextureBinding(std::string_view bindingName,
-                             MaterialDescriptorSet::TextureBinding &outBinding) const;
+                                                   MaterialDescriptorSet::TextureBinding &outBinding) const;
 
     [[nodiscard]] bool TryResolveExplicitTextureBinding(const std::string &texturePath, const std::string &bindingName,
-                              MaterialDescriptorSet::TextureBinding &outBinding) const;
+                                                        MaterialDescriptorSet::TextureBinding &outBinding) const;
 
     /**
      * @brief Update descriptor set bindings

@@ -502,7 +502,8 @@ MaterialDescriptorSet *MaterialDescriptorManager::GetOrCreateDescriptorSet(const
                 if (binding.name == propName) {
                     MaterialDescriptorSet::TextureBinding resolvedBinding{};
                     const bool resolvedExplicit =
-                        !isPlaceholderTexture && TryResolveExplicitTextureBinding(*texturePath, binding.name, resolvedBinding);
+                        !isPlaceholderTexture &&
+                        TryResolveExplicitTextureBinding(*texturePath, binding.name, resolvedBinding);
 
                     if (!resolvedExplicit && !TryGetDefaultTextureBinding(binding.name, resolvedBinding)) {
                         matDescSet->textureBindings.erase(binding.binding);

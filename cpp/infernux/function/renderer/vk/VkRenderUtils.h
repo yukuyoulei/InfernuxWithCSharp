@@ -14,8 +14,7 @@ inline VkSubpassDependency MakePipelineCompatibleSubpassDependency()
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
     dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependency.dstStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
@@ -24,8 +23,8 @@ inline VkSubpassDependency MakePipelineCompatibleSubpassDependency()
 }
 
 inline VkDescriptorSetLayoutBinding MakeDescriptorSetLayoutBinding(uint32_t binding, VkDescriptorType descriptorType,
-                                                                  VkShaderStageFlags stageFlags,
-                                                                  uint32_t descriptorCount = 1)
+                                                                   VkShaderStageFlags stageFlags,
+                                                                   uint32_t descriptorCount = 1)
 {
     VkDescriptorSetLayoutBinding layoutBinding{};
     layoutBinding.binding = binding;
@@ -97,8 +96,8 @@ inline void CmdBarrierUniformReadToTransferWrite(VkCommandBuffer cmdBuf)
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmdBuf, kShaderUniformReadStages, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
-                         nullptr, 0, nullptr);
+    vkCmdPipelineBarrier(cmdBuf, kShaderUniformReadStages, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr,
+                         0, nullptr);
 }
 
 inline void CmdBarrierTransferWriteToUniformRead(VkCommandBuffer cmdBuf)
@@ -107,8 +106,8 @@ inline void CmdBarrierTransferWriteToUniformRead(VkCommandBuffer cmdBuf)
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
-    vkCmdPipelineBarrier(cmdBuf, VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderUniformReadStages, 0, 1, &barrier, 0,
-                         nullptr, 0, nullptr);
+    vkCmdPipelineBarrier(cmdBuf, VK_PIPELINE_STAGE_TRANSFER_BIT, kShaderUniformReadStages, 0, 1, &barrier, 0, nullptr,
+                         0, nullptr);
 }
 
 } // namespace infernux::vkrender

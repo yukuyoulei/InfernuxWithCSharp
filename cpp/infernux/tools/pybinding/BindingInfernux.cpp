@@ -72,8 +72,7 @@ PYBIND11_MODULE(_Infernux, m)
         .def_readwrite("ubo_descriptors_per_material", &EngineConfig::uboDescriptorsPerMaterial)
         .def_readwrite("sampler_descriptors_per_material", &EngineConfig::samplerDescriptorsPerMaterial)
         .def_readwrite("fullscreen_descriptor_sets_per_frame", &EngineConfig::fullscreenDescriptorSetsPerFrame)
-        .def_readwrite("fullscreen_sampler_descriptors_per_frame",
-                   &EngineConfig::fullscreenSamplerDescriptorsPerFrame)
+        .def_readwrite("fullscreen_sampler_descriptors_per_frame", &EngineConfig::fullscreenSamplerDescriptorsPerFrame)
         // Rendering — Textures
         .def_readwrite("enable_mipmap", &EngineConfig::enableMipmap)
         .def_readwrite("anisotropy_scale", &EngineConfig::anisotropyScale)

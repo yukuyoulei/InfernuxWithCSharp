@@ -621,8 +621,7 @@ void OutlineRenderer::CreateOutlinePipelines()
 
         std::array<VkPipelineShaderStageCreateInfo, 2> stages = {
             MakeShaderStageInfo(VK_SHADER_STAGE_VERTEX_BIT, m_core->GetShaderModule("outline_composite", "vertex")),
-            MakeShaderStageInfo(VK_SHADER_STAGE_FRAGMENT_BIT,
-                                m_core->GetShaderModule("outline_composite", "fragment")),
+            MakeShaderStageInfo(VK_SHADER_STAGE_FRAGMENT_BIT, m_core->GetShaderModule("outline_composite", "fragment")),
         };
 
         // No vertex input (fullscreen triangle is procedural)
@@ -877,8 +876,8 @@ VkDescriptorSet OutlineRenderer::GetOrCreateMtlOutlineDescSet(InxMaterial *mater
     sceneBufInfo.buffer = m_core->GetUniformBuffer(0);
     sceneBufInfo.offset = 0;
     sceneBufInfo.range = sizeof(UniformBufferObject);
-    vkrender::UpdateDescriptorSetWithBuffer(device, descSet, kOutlineSceneUBOBinding,
-                                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, sceneBufInfo);
+    vkrender::UpdateDescriptorSetWithBuffer(device, descSet, kOutlineSceneUBOBinding, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                            sceneBufInfo);
 
     // Vertex material UBO
     VkDescriptorBufferInfo vertMatBufInfo{};

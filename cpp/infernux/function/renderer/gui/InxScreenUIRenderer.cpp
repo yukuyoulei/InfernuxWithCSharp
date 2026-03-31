@@ -19,10 +19,10 @@
 #include "InxTextLayout.h"
 #include <algorithm>
 #include <array>
-#include <cstring>
-#include <function/renderer/vk/VkRenderUtils.h>
 #include <cmath>
 #include <core/log/InxLog.h>
+#include <cstring>
+#include <function/renderer/vk/VkRenderUtils.h>
 #include <imgui_internal.h> // for ImGui::GetDrawListSharedData()
 #include <type_traits>
 
