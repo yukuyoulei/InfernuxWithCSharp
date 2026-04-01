@@ -1127,6 +1127,61 @@ def _render_nested_so(
         changes[so_fn] = edited
 
 
+# ── Asset-type reference field configuration ──
+# Maps FieldType → (type_hint, drag_type, asset_globs, id_prefix)
+_ASSET_REF_CONFIG = None  # lazy-initialized (needs FieldType import)
+
+
+def _get_asset_ref_config():
+    global _ASSET_REF_CONFIG
+    if _ASSET_REF_CONFIG is None:
+        from Infernux.components.serialized_field import FieldType
+        _ASSET_REF_CONFIG = {
+            FieldType.MATERIAL: ("Material",  "MATERIAL_FILE", ("*.mat",),                     "mat"),
+            FieldType.TEXTURE:  ("Texture",   "TEXTURE_FILE",  ("*.png", "*.jpg"),              "tex"),
+            FieldType.SHADER:   ("Shader",    "SHADER_FILE",   ("*.vert", "*.frag"),            "shd"),
+            FieldType.ASSET:    ("AudioClip", "AUDIO_FILE",    ("*.wav", "*.mp3", "*.ogg"),     "aud"),
+        }
+    return _ASSET_REF_CONFIG
+
+
+def _render_asset_reference_field(ctx, comp, field_name, metadata, current_value, field_type, lw):
+    """Render a MATERIAL / TEXTURE / SHADER / ASSET reference field.
+
+    Delegates display-name extraction to ``_get_reference_display_name``,
+    uses ``_apply_reference_drop`` for drag-drop, and ``_picker_assets``
+    for the picker dialog.
+    """
+    type_hint, drag_type, globs, prefix = _get_asset_ref_config()[field_type]
+    display = _get_reference_display_name(field_type, current_value)
+
+    def _on_pick(path, _fn=field_name, _comp=comp, _ft=field_type):
+        ref = _create_reference_value_from_payload(_ft, path)
+        if ref is not None:
+            old = getattr(_comp, _fn, None)
+            _record_property(_comp, _fn, old, ref, f"Set {_fn}")
+
+    def _on_clear(_fn=field_name, _comp=comp):
+        old = getattr(_comp, _fn, None)
+        _record_property(_comp, _fn, old, None, f"Clear {_fn}")
+
+    def _picker(filt):
+        result = []
+        for g in globs:
+            result += _picker_assets(filt, g)
+        return result
+
+    field_label(ctx, pretty_field_name(field_name), lw)
+    render_object_field(
+        ctx, f"{prefix}_ref_{field_name}", display, type_hint,
+        accept_drag_type=drag_type,
+        on_drop_callback=lambda payload, _fn=field_name, _comp=comp, _ft=field_type: _apply_reference_drop(_ft, _comp, _fn, payload),
+        picker_asset_items=_picker,
+        on_pick=_on_pick,
+        on_clear=_on_clear,
+    )
+
+
 def render_py_component(ctx: InxGUIContext, py_comp):
     """Render a Python InxComponent's serialized fields.
 
@@ -1254,7 +1309,7 @@ def render_py_component(ctx: InxGUIContext, py_comp):
             render_object_field(
                 ctx, f"comp_ref_{field_name}", _display, _type_hint,
                 accept_drag_type=["HIERARCHY_GAMEOBJECT", "PREFAB_GUID", "PREFAB_FILE"],
-                on_drop_callback=lambda payload, _fn=field_name, _comp=py_comp, _ct=metadata.component_type: _apply_component_ref_drop(_comp, _fn, payload, _ct),
+                on_drop_callback=lambda payload, _fn=field_name, _comp=py_comp, _ct=metadata.component_type: _apply_reference_drop(FieldType.COMPONENT, _comp, _fn, payload, _ct),
                 picker_scene_items=_comp_scene,
                 on_pick=_comp_on_pick,
                 on_clear=_comp_on_clear,
@@ -1305,115 +1360,8 @@ def render_py_component(ctx: InxGUIContext, py_comp):
                 on_clear=_go_on_clear,
             )
 
-        elif metadata.field_type == FieldType.MATERIAL:
-            _display_mat = current_value
-            if hasattr(current_value, 'resolve'):
-                _display_mat = current_value.resolve()
-            display = _display_mat.name if _display_mat and hasattr(_display_mat, 'name') else "None"
-
-            def _mat_on_pick(path, _fn=field_name, _comp=py_comp):
-                ref = _create_reference_value_from_payload(FieldType.MATERIAL, path)
-                if ref is not None:
-                    old = getattr(_comp, _fn, None)
-                    _record_property(_comp, _fn, old, ref, f"Set {_fn}")
-
-            def _mat_on_clear(_fn=field_name, _comp=py_comp):
-                old = getattr(_comp, _fn, None)
-                _record_property(_comp, _fn, old, None, f"Clear {_fn}")
-
-            field_label(ctx, pretty_field_name(field_name), lw)
-            render_object_field(
-                ctx, f"mat_ref_{field_name}", display, "Material",
-                accept_drag_type="MATERIAL_FILE",
-                on_drop_callback=lambda payload, _fn=field_name, _comp=py_comp: _apply_material_drop(_comp, _fn, payload),
-                picker_asset_items=lambda filt: _picker_assets(filt, "*.mat"),
-                on_pick=_mat_on_pick,
-                on_clear=_mat_on_clear,
-            )
-
-        elif metadata.field_type == FieldType.TEXTURE:
-            _display_name = "None"
-            if hasattr(current_value, 'display_name'):
-                _display_name = current_value.display_name
-            elif current_value and hasattr(current_value, 'name'):
-                _display_name = current_value.name
-
-            def _tex_on_pick(path, _fn=field_name, _comp=py_comp):
-                ref = _create_reference_value_from_payload(FieldType.TEXTURE, path)
-                if ref is not None:
-                    old = getattr(_comp, _fn, None)
-                    _record_property(_comp, _fn, old, ref, f"Set {_fn}")
-
-            def _tex_on_clear(_fn=field_name, _comp=py_comp):
-                old = getattr(_comp, _fn, None)
-                _record_property(_comp, _fn, old, None, f"Clear {_fn}")
-
-            field_label(ctx, pretty_field_name(field_name), lw)
-            render_object_field(
-                ctx, f"tex_ref_{field_name}", _display_name, "Texture",
-                accept_drag_type="TEXTURE_FILE",
-                on_drop_callback=lambda payload, _fn=field_name, _comp=py_comp: _apply_texture_drop(_comp, _fn, payload),
-                picker_asset_items=lambda filt: _picker_assets(filt, "*.png") + _picker_assets(filt, "*.jpg"),
-                on_pick=_tex_on_pick,
-                on_clear=_tex_on_clear,
-            )
-
-        elif metadata.field_type == FieldType.SHADER:
-            _display_name = "None"
-            if hasattr(current_value, 'display_name'):
-                _display_name = current_value.display_name
-            elif current_value and hasattr(current_value, 'source_path'):
-                _display_name = current_value.source_path
-
-            def _shd_on_pick(path, _fn=field_name, _comp=py_comp):
-                ref = _create_reference_value_from_payload(FieldType.SHADER, path)
-                if ref is not None:
-                    old = getattr(_comp, _fn, None)
-                    _record_property(_comp, _fn, old, ref, f"Set {_fn}")
-
-            def _shd_on_clear(_fn=field_name, _comp=py_comp):
-                old = getattr(_comp, _fn, None)
-                _record_property(_comp, _fn, old, None, f"Clear {_fn}")
-
-            field_label(ctx, pretty_field_name(field_name), lw)
-            render_object_field(
-                ctx, f"shd_ref_{field_name}", _display_name, "Shader",
-                accept_drag_type="SHADER_FILE",
-                on_drop_callback=lambda payload, _fn=field_name, _comp=py_comp: _apply_shader_drop(_comp, _fn, payload),
-                picker_asset_items=lambda filt: _picker_assets(filt, "*.vert") + _picker_assets(filt, "*.frag"),
-                on_pick=_shd_on_pick,
-                on_clear=_shd_on_clear,
-            )
-
-        elif metadata.field_type == FieldType.ASSET:
-            _display_name = _get_reference_display_name(FieldType.ASSET, current_value)
-
-            def _apply_audio_ref(payload, _fn=field_name, _comp=py_comp):
-                ref = _create_reference_value_from_payload(FieldType.ASSET, payload)
-                if ref is None:
-                    return
-                old_val = getattr(_comp, _fn, None)
-                _record_property(_comp, _fn, old_val, ref, f"Set {_fn}")
-
-            def _aud_on_pick(path, _fn=field_name, _comp=py_comp):
-                ref = _create_reference_value_from_payload(FieldType.ASSET, path)
-                if ref is not None:
-                    old = getattr(_comp, _fn, None)
-                    _record_property(_comp, _fn, old, ref, f"Set {_fn}")
-
-            def _aud_on_clear(_fn=field_name, _comp=py_comp):
-                old = getattr(_comp, _fn, None)
-                _record_property(_comp, _fn, old, None, f"Clear {_fn}")
-
-            field_label(ctx, pretty_field_name(field_name), lw)
-            render_object_field(
-                ctx, f"aud_ref_{field_name}", _display_name, "AudioClip",
-                accept_drag_type="AUDIO_FILE",
-                on_drop_callback=_apply_audio_ref,
-                picker_asset_items=lambda filt: _picker_assets(filt, "*.wav") + _picker_assets(filt, "*.mp3") + _picker_assets(filt, "*.ogg"),
-                on_pick=_aud_on_pick,
-                on_clear=_aud_on_clear,
-            )
+        elif metadata.field_type in _get_asset_ref_config():
+            _render_asset_reference_field(ctx, py_comp, field_name, metadata, current_value, metadata.field_type, lw)
 
         else:
             # ── All scalar types via unified renderer ──
@@ -1436,22 +1384,27 @@ def render_py_component(ctx: InxGUIContext, py_comp):
 
 
 
-def _apply_gameobject_drop(comp, field_name: str, payload, required_component: str = None):
-    """Handle a HIERARCHY_GAMEOBJECT drag-drop onto a GAME_OBJECT field.
+def _apply_reference_drop(field_type, comp, field_name: str, payload, required_component: str = None):
+    """Generic handler for reference-type drag-drop onto a field.
 
-    Wraps the result in a ``GameObjectRef`` for null safety.
-    If *required_component* is set, rejects objects that lack that C++ component.
+    Works for GAME_OBJECT, MATERIAL, TEXTURE, SHADER, ASSET, and COMPONENT
+    fields.  For COMPONENT fields, reads the old value via
+    ``get_raw_field_value`` instead of plain ``getattr``.
     """
     try:
-        from Infernux.components.serialized_field import FieldType
-        ref = _create_reference_value_from_payload(FieldType.GAME_OBJECT, payload, required_component)
+        ref = _create_reference_value_from_payload(field_type, payload, required_component)
         if ref is None:
             return
-        old_val = getattr(comp, field_name, None)
+        from Infernux.components.serialized_field import FieldType
+        if field_type == FieldType.COMPONENT:
+            from Infernux.components.serialized_field import get_raw_field_value
+            old_val = get_raw_field_value(comp, field_name)
+        else:
+            old_val = getattr(comp, field_name, None)
         _record_property(comp, field_name, old_val, ref, f"Set {field_name}")
     except Exception as e:
         from Infernux.debug import Debug
-        Debug.log_error(f"GameObject drop failed: {e}")
+        Debug.log_error(f"Reference drop failed for {field_name}: {e}")
 
 
 def _apply_gameobject_or_prefab_drop(comp, field_name: str, payload, required_component: str = None):
@@ -1490,78 +1443,11 @@ def _apply_gameobject_or_prefab_drop(comp, field_name: str, payload, required_co
             Debug.log_error(f"Prefab drop failed: {e}")
     else:
         # HIERARCHY_GAMEOBJECT drop (payload is int ID)
-        _apply_gameobject_drop(comp, field_name, payload, required_component)
-
-
-def _apply_material_drop(comp, field_name: str, payload):
-    """Handle a MATERIAL_FILE drag-drop onto a MATERIAL field.
-
-    Wraps the result in a ``MaterialRef`` for null safety and GUID persistence.
-    """
-    try:
         from Infernux.components.serialized_field import FieldType
-        ref = _create_reference_value_from_payload(FieldType.MATERIAL, payload)
-        if ref is None:
-            return
-        old_val = getattr(comp, field_name, None)
-        _record_property(comp, field_name, old_val, ref, f"Set {field_name}")
-    except Exception as e:
-        from Infernux.debug import Debug
-        Debug.log_error(f"Material drop failed: {e}")
+        _apply_reference_drop(FieldType.GAME_OBJECT, comp, field_name, payload, required_component)
 
 
-def _apply_texture_drop(comp, field_name: str, payload):
-    """Handle a TEXTURE_FILE / IMAGE_FILE drag-drop onto a TEXTURE field.
 
-    Creates a ``TextureRef`` that stores the GUID for scene serialization.
-    """
-    try:
-        from Infernux.components.serialized_field import FieldType
-        ref = _create_reference_value_from_payload(FieldType.TEXTURE, payload)
-        if ref is None:
-            return
-        old_val = getattr(comp, field_name, None)
-        _record_property(comp, field_name, old_val, ref, f"Set {field_name}")
-    except Exception as e:
-        from Infernux.debug import Debug
-        Debug.log_error(f"Texture drop failed: {e}")
-
-
-def _apply_shader_drop(comp, field_name: str, payload):
-    """Handle a SHADER_FILE drag-drop onto a SHADER field.
-
-    Creates a ``ShaderRef`` that stores the GUID for scene serialization.
-    """
-    try:
-        from Infernux.components.serialized_field import FieldType
-        ref = _create_reference_value_from_payload(FieldType.SHADER, payload)
-        if ref is None:
-            return
-        old_val = getattr(comp, field_name, None)
-        _record_property(comp, field_name, old_val, ref, f"Set {field_name}")
-    except Exception as e:
-        from Infernux.debug import Debug
-        Debug.log_error(f"Shader drop failed: {e}")
-
-
-def _apply_component_ref_drop(comp, field_name: str, payload, component_type: str = ""):
-    """Handle a HIERARCHY_GAMEOBJECT drag-drop onto a COMPONENT field.
-
-    Creates a ``ComponentRef`` pointing to the target component on the
-    dropped GameObject.  Delegates to ``_create_reference_value_from_payload``
-    for consistency with list fields.
-    """
-    try:
-        from Infernux.components.serialized_field import FieldType
-        ref = _create_reference_value_from_payload(FieldType.COMPONENT, payload, component_type)
-        if ref is None:
-            return
-        from Infernux.components.serialized_field import get_raw_field_value
-        old_val = get_raw_field_value(comp, field_name)
-        _record_property(comp, field_name, old_val, ref, f"Set {field_name}")
-    except Exception as e:
-        from Infernux.debug import Debug
-        Debug.log_error(f"ComponentRef drop failed: {e}")
 
 
 # ============================================================================
