@@ -164,6 +164,16 @@ class ToolbarPanel(EditorPanel):
             self._engine.set_show_grid(ng)
         ctx.dummy(0, 4)
 
+    # (key, label_key, min, max, step, step_fast, section_header_key)
+    _CAMERA_PARAMS = (
+        ("fov",              "toolbar.field_of_view",        10.0,  120.0, 1.0,   10.0, None),
+        ("rotation_speed",   "toolbar.rotation_sensitivity", 0.005, 1.0,   0.005, 0.05, "toolbar.navigation_header"),
+        ("pan_speed",        "toolbar.pan_speed",            0.1,   10.0,  0.1,   1.0,  None),
+        ("zoom_speed",       "toolbar.zoom_speed",           0.1,   10.0,  0.1,   1.0,  None),
+        ("move_speed",       "toolbar.move_speed",           0.1,   50.0,  0.1,   1.0,  None),
+        ("move_speed_boost", "toolbar.speed_boost",          1.0,   20.0,  0.1,   1.0,  None),
+    )
+
     def _popup_camera(self, ctx: InxGUIContext):
         cam = self._engine.editor_camera if self._engine else None
         if not cam:
@@ -174,93 +184,21 @@ class ToolbarPanel(EditorPanel):
         ctx.label(t("toolbar.scene_camera"))
         ctx.separator()
         ctx.dummy(0, 4)
-        self._set_camera_setting(
-            "fov",
-            self._render_camera_float_setting(
-                ctx,
-                t("toolbar.field_of_view"),
-                "fov",
-                self._camera_settings["fov"],
-                10.0,
-                120.0,
-                step=1.0,
-                step_fast=10.0,
-            ),
-        )
-        ctx.dummy(0, 4)
-        ctx.label(t("toolbar.navigation_header"))
-        ctx.separator()
-        ctx.dummy(0, 4)
-        self._set_camera_setting(
-            "rotation_speed",
-            self._render_camera_float_setting(
-                ctx,
-                t("toolbar.rotation_sensitivity"),
-                "rotation_speed",
-                self._camera_settings["rotation_speed"],
-                0.005,
-                1.0,
-                step=0.005,
-                step_fast=0.05,
-            ),
-        )
-        ctx.dummy(0, 4)
-        self._set_camera_setting(
-            "pan_speed",
-            self._render_camera_float_setting(
-                ctx,
-                t("toolbar.pan_speed"),
-                "pan_speed",
-                self._camera_settings["pan_speed"],
-                0.1,
-                10.0,
-                step=0.1,
-                step_fast=1.0,
-            ),
-        )
-        ctx.dummy(0, 4)
-        self._set_camera_setting(
-            "zoom_speed",
-            self._render_camera_float_setting(
-                ctx,
-                t("toolbar.zoom_speed"),
-                "zoom_speed",
-                self._camera_settings["zoom_speed"],
-                0.1,
-                10.0,
-                step=0.1,
-                step_fast=1.0,
-            ),
-        )
-        ctx.dummy(0, 4)
-        self._set_camera_setting(
-            "move_speed",
-            self._render_camera_float_setting(
-                ctx,
-                t("toolbar.move_speed"),
-                "move_speed",
-                self._camera_settings["move_speed"],
-                0.1,
-                50.0,
-                step=0.1,
-                step_fast=1.0,
-            ),
-        )
-        ctx.dummy(0, 4)
-        self._set_camera_setting(
-            "move_speed_boost",
-            self._render_camera_float_setting(
-                ctx,
-                t("toolbar.speed_boost"),
-                "move_speed_boost",
-                self._camera_settings["move_speed_boost"],
-                1.0,
-                20.0,
-                step=0.1,
-                step_fast=1.0,
-            ),
-        )
-        ctx.dummy(0, 6)
+        for key, label_key, mn, mx, step, step_fast, header in self._CAMERA_PARAMS:
+            if header:
+                ctx.label(t(header))
+                ctx.separator()
+                ctx.dummy(0, 4)
+            self._set_camera_setting(
+                key,
+                self._render_camera_float_setting(
+                    ctx, t(label_key), key,
+                    self._camera_settings[key],
+                    mn, mx, step=step, step_fast=step_fast,
+                ),
+            )
+            ctx.dummy(0, 4)
+        ctx.dummy(0, 2)
         ctx.button(t("toolbar.reset_camera_settings"), self._reset_camera_settings, width=-1.0)
         ctx.dummy(0, 4)
 
