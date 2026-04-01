@@ -90,19 +90,27 @@ def _snapshot_value(value: Any) -> Any:
     If deep-copy fails (e.g. pybind11 C++ objects that cannot be pickled),
     fall back to a shallow copy so the undo system stays functional.
     """
-    if isinstance(value, list):
+    if isinstance(value, (list, dict)):
         import copy
         try:
             return copy.deepcopy(value)
         except Exception:
-            return list(value)
-    if isinstance(value, dict):
-        import copy
-        try:
-            return copy.deepcopy(value)
-        except Exception:
-            return dict(value)
+            return list(value) if isinstance(value, list) else dict(value)
     return value
+
+
+def _game_object_id_of(target: Any) -> int:
+    """Extract the owner game-object ID from a component-like *target*.
+
+    Checks ``game_object_id`` first, then ``game_object.id``.
+    Returns ``0`` when neither is available.
+    """
+    goid = getattr(target, 'game_object_id', None) or 0
+    if not goid:
+        go = getattr(target, 'game_object', None)
+        if go is not None:
+            goid = getattr(go, 'id', 0) or 0
+    return goid
 
 
 def _resolve_live_ref(stored: Any, game_object_id: int,
@@ -283,6 +291,18 @@ def _instantiate_py_component_snapshot(type_name: str, script_guid: str,
     return instance
 
 
+def _get_current_selection_ids() -> List[int]:
+    """Return the current SelectionManager IDs, or ``[]`` on failure."""
+    try:
+        from Infernux.engine.ui.selection_manager import SelectionManager
+        sel = SelectionManager.instance()
+        if sel:
+            return sel.get_ids()
+    except Exception:
+        pass
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Concrete commands
 # ---------------------------------------------------------------------------
@@ -315,13 +335,8 @@ class SetPropertyCommand(UndoCommand):
         self._target_id: int = self._stable_id(target)
         # Cache owner game object ID + type name so undo/redo can re-fetch
         # the live component after a delete+recreate cycle (stale C++ pointer).
-        _goid = getattr(target, 'game_object_id', None) or 0
-        if not _goid:
-            _go = getattr(target, 'game_object', None)
-            if _go is not None:
-                _goid = getattr(_go, 'id', 0) or 0
-        self._game_object_id: int = _goid
-        self._comp_type_name: str = _comp_type_name_of(target) if _goid else ""
+        self._game_object_id: int = _game_object_id_of(target)
+        self._comp_type_name: str = _comp_type_name_of(target) if self._game_object_id else ""
 
     # -- stable identity for merge comparisons --
     @staticmethod
@@ -384,12 +399,7 @@ class GenericComponentCommand(UndoCommand):
         self._old_json = old_json
         self._new_json = new_json
         self._comp_id: int = getattr(comp, "component_id", id(comp))
-        _goid = getattr(comp, 'game_object_id', None) or 0
-        if not _goid:
-            _go = getattr(comp, 'game_object', None)
-            if _go is not None:
-                _goid = getattr(_go, 'id', 0) or 0
-        self._game_object_id: int = _goid
+        self._game_object_id: int = _game_object_id_of(comp)
         self._comp_type_name: str = _comp_type_name_of(comp)
 
     def execute(self) -> None:
@@ -450,12 +460,7 @@ class BuiltinPropertyCommand(UndoCommand):
         self._old_value = _snapshot_value(old_value)
         self._new_value = _snapshot_value(new_value)
         self._comp_id: int = getattr(comp, "component_id", id(comp))
-        _goid = getattr(comp, 'game_object_id', None) or 0
-        if not _goid:
-            _go = getattr(comp, 'game_object', None)
-            if _go is not None:
-                _goid = getattr(_go, 'id', 0) or 0
-        self._game_object_id: int = _goid
+        self._game_object_id: int = _game_object_id_of(comp)
         self._comp_type_name: str = _comp_type_name_of(comp)
 
     def execute(self) -> None:
@@ -515,17 +520,7 @@ class CreateGameObjectCommand(UndoCommand):
         self._parent_id: Optional[int] = None
         self._sibling_index: int = 0
         # Selection state just after creation (usually [object_id]).
-        self._post_create_ids: List[int] = []
-        self._capture_selection()
-
-    def _capture_selection(self) -> None:
-        try:
-            from Infernux.engine.ui.selection_manager import SelectionManager
-            sel = SelectionManager.instance()
-            if sel:
-                self._post_create_ids = sel.get_ids()
-        except Exception:
-            pass
+        self._post_create_ids: List[int] = _get_current_selection_ids()
 
     def execute(self) -> None:
         pass  # already created before record()
@@ -590,16 +585,7 @@ class DeleteGameObjectCommand(UndoCommand):
                 self._parent_id = parent.id if parent else None
                 self._sibling_index = (obj.transform.get_sibling_index()
                                        if getattr(obj, "transform", None) else 0)
-        self._capture_selection()
-
-    def _capture_selection(self) -> None:
-        try:
-            from Infernux.engine.ui.selection_manager import SelectionManager
-            sel = SelectionManager.instance()
-            if sel:
-                self._pre_delete_selection_ids = sel.get_ids()
-        except Exception:
-            pass
+        self._pre_delete_selection_ids = _get_current_selection_ids()
 
     def execute(self) -> None:
         scene = _get_active_scene()
@@ -1422,13 +1408,9 @@ def _find_live_native_component(obj, type_name: str):
         except Exception:
             pass
     # Fallback: iterate all components
-    if hasattr(obj, 'get_components'):
-        try:
-            for c in obj.get_components():
-                if getattr(c, 'type_name', None) == type_name:
-                    return c
-        except Exception:
-            pass
+    for c in _safe_iter(obj, 'get_components'):
+        if getattr(c, 'type_name', None) == type_name:
+            return c
     return None
 
 
@@ -1459,6 +1441,20 @@ def _invalidate_builtin_wrapper(comp_ref):
         wrapper._invalidate_native_binding()
 
 
+def _safe_iter(obj, method_name: str) -> list:
+    """Call *obj*.<method_name>() and return the result as a list.
+
+    Returns an empty list when the method does not exist or raises.
+    """
+    fn = getattr(obj, method_name, None)
+    if fn is None:
+        return []
+    try:
+        return list(fn())
+    except Exception:
+        return []
+
+
 def _invalidate_builtin_wrappers_for_object_tree(obj) -> None:
     """Invalidate cached BuiltinComponent wrappers for a GameObject tree."""
     try:
@@ -1466,34 +1462,20 @@ def _invalidate_builtin_wrappers_for_object_tree(obj) -> None:
     except ImportError:
         return
 
+    cache = BuiltinComponent._wrapper_cache
     pending = [obj]
     while pending:
         current = pending.pop()
         if current is None:
             continue
-        if hasattr(current, "get_components"):
-            try:
-                components = list(current.get_components())
-            except Exception:
-                components = []
-            for comp in components:
-                try:
-                    comp_id = getattr(comp, "component_id", 0) or 0
-                except Exception:
-                    comp_id = 0
-                if not comp_id:
-                    continue
-                wrapper = BuiltinComponent._wrapper_cache.get(comp_id)
-                if wrapper is not None:
-                    try:
-                        wrapper._invalidate_native_binding()
-                    except Exception:
-                        pass
-        if hasattr(current, "get_children"):
-            try:
-                pending.extend(list(current.get_children()))
-            except Exception:
-                pass
+        for comp in _safe_iter(current, "get_components"):
+            comp_id = getattr(comp, "component_id", 0) or 0
+            if not comp_id:
+                continue
+            wrapper = cache.get(comp_id)
+            if wrapper is not None:
+                wrapper._invalidate_native_binding()
+        pending.extend(_safe_iter(current, "get_children"))
 
 
 def _destroy_game_object_immediately(scene, obj) -> None:
