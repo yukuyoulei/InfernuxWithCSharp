@@ -3,6 +3,9 @@
 #include "gui/InxResourcePreviewer.h"
 #include <function/editor/ConsolePanel.h>
 #include <function/editor/EditorPanel.h>
+#include <function/editor/MenuBarPanel.h>
+#include <function/editor/StatusBarPanel.h>
+#include <function/editor/ToolbarPanel.h>
 #include <pybind11/chrono.h>
 #include <pybind11/complex.h>
 #include <pybind11/functional.h>
@@ -569,6 +572,129 @@ void RegisterGUIBindings(py::module_ &m)
         .def_readwrite("clear_on_play", &ConsolePanel::clearOnPlay)
         .def_readwrite("error_pause", &ConsolePanel::errorPause)
         .def_readwrite("auto_scroll", &ConsolePanel::autoScroll);
+
+    // ── PlayState enum ─────────────────────────────────────────────────
+    py::enum_<PlayState>(m, "PlayState")
+        .value("Edit", PlayState::Edit)
+        .value("Playing", PlayState::Playing)
+        .value("Paused", PlayState::Paused);
+
+    // ── WindowTypeInfo ─────────────────────────────────────────────────
+    py::class_<WindowTypeInfo>(m, "WindowTypeInfo")
+        .def(py::init<>())
+        .def_readwrite("type_id", &WindowTypeInfo::typeId)
+        .def_readwrite("display_name", &WindowTypeInfo::displayName)
+        .def_readwrite("singleton", &WindowTypeInfo::singleton);
+
+    // ── StatusBarPanel ─────────────────────────────────────────────────
+    py::class_<StatusBarPanel, InxGUIRenderable, std::shared_ptr<StatusBarPanel>>(m, "StatusBarPanel")
+        .def(py::init<>())
+        .def("set_console_panel",
+             [](StatusBarPanel &self, std::shared_ptr<ConsolePanel> panel) { self.SetConsolePanel(panel.get()); },
+             py::arg("console"), py::keep_alive<1, 2>(), "Wire to ConsolePanel for click-to-select-latest")
+        .def("set_latest_message", &StatusBarPanel::SetLatestMessage, py::arg("message"), py::arg("level"),
+             "Show a new log message in the left zone")
+        .def("clear_counts", &StatusBarPanel::ClearCounts, "Reset counts and latest message")
+        .def("set_engine_status", &StatusBarPanel::SetEngineStatus, py::arg("text"), py::arg("progress"),
+             "Update engine-status indicator")
+        .def("increment_warn_count", &StatusBarPanel::IncrementWarnCount)
+        .def("increment_error_count", &StatusBarPanel::IncrementErrorCount);
+
+    // ── ToolbarPanel ───────────────────────────────────────────────────
+    py::class_<ToolbarPanel, EditorPanel, std::shared_ptr<ToolbarPanel>>(m, "ToolbarPanel")
+        .def(py::init<>())
+        .def_readwrite("on_play", &ToolbarPanel::onPlay)
+        .def_readwrite("on_pause", &ToolbarPanel::onPause)
+        .def_readwrite("on_step", &ToolbarPanel::onStep)
+        .def_readwrite("get_play_state", &ToolbarPanel::getPlayState)
+        .def_readwrite("get_play_time_str", &ToolbarPanel::getPlayTimeStr)
+        .def_readwrite("is_show_grid", &ToolbarPanel::isShowGrid)
+        .def_readwrite("set_show_grid", &ToolbarPanel::setShowGrid)
+        .def_readwrite("translate", &ToolbarPanel::translate)
+        .def(
+            "get_camera_settings",
+            [](const ToolbarPanel &self) -> py::dict {
+                auto s = self.GetCameraSettings();
+                py::dict d;
+                d["fov"] = s.fov;
+                d["rotation_speed"] = s.rotationSpeed;
+                d["pan_speed"] = s.panSpeed;
+                d["zoom_speed"] = s.zoomSpeed;
+                d["move_speed"] = s.moveSpeed;
+                d["move_speed_boost"] = s.moveSpeedBoost;
+                return d;
+            },
+            "Get camera settings as dict")
+        .def(
+            "set_camera_settings",
+            [](ToolbarPanel &self, py::dict d) {
+                ToolbarPanel::CameraSettings s;
+                s.fov = d.contains("fov") ? d["fov"].cast<float>() : 60.0f;
+                s.rotationSpeed = d.contains("rotation_speed") ? d["rotation_speed"].cast<float>() : 0.05f;
+                s.panSpeed = d.contains("pan_speed") ? d["pan_speed"].cast<float>() : 1.0f;
+                s.zoomSpeed = d.contains("zoom_speed") ? d["zoom_speed"].cast<float>() : 1.0f;
+                s.moveSpeed = d.contains("move_speed") ? d["move_speed"].cast<float>() : 5.0f;
+                s.moveSpeedBoost = d.contains("move_speed_boost") ? d["move_speed_boost"].cast<float>() : 3.0f;
+                self.SetCameraSettings(s);
+            },
+            py::arg("settings"), "Set camera settings from dict")
+        .def_property(
+            "sync_camera_from_engine",
+            [](const ToolbarPanel &self) -> py::object { return py::none(); },
+            [](ToolbarPanel &self, py::function fn) {
+                self.syncCameraFromEngine = [fn]() -> ToolbarPanel::CameraSettings {
+                    py::dict d = fn();
+                    ToolbarPanel::CameraSettings s;
+                    s.fov = d.contains("fov") ? d["fov"].cast<float>() : 60.0f;
+                    s.rotationSpeed = d.contains("rotation_speed") ? d["rotation_speed"].cast<float>() : 0.05f;
+                    s.panSpeed = d.contains("pan_speed") ? d["pan_speed"].cast<float>() : 1.0f;
+                    s.zoomSpeed = d.contains("zoom_speed") ? d["zoom_speed"].cast<float>() : 1.0f;
+                    s.moveSpeed = d.contains("move_speed") ? d["move_speed"].cast<float>() : 5.0f;
+                    s.moveSpeedBoost = d.contains("move_speed_boost") ? d["move_speed_boost"].cast<float>() : 3.0f;
+                    return s;
+                };
+            },
+            "Set a Python callback that returns camera settings dict")
+        .def_property(
+            "apply_camera_to_engine",
+            [](const ToolbarPanel &self) -> py::object { return py::none(); },
+            [](ToolbarPanel &self, py::function fn) {
+                self.applyCameraToEngine = [fn](const ToolbarPanel::CameraSettings &s) {
+                    py::dict d;
+                    d["fov"] = s.fov;
+                    d["rotation_speed"] = s.rotationSpeed;
+                    d["pan_speed"] = s.panSpeed;
+                    d["zoom_speed"] = s.zoomSpeed;
+                    d["move_speed"] = s.moveSpeed;
+                    d["move_speed_boost"] = s.moveSpeedBoost;
+                    fn(d);
+                };
+            },
+            "Set a Python callback that receives camera settings dict");
+
+    // ── MenuBarPanel ───────────────────────────────────────────────────
+    py::class_<MenuBarPanel, InxGUIRenderable, std::shared_ptr<MenuBarPanel>>(m, "MenuBarPanel")
+        .def(py::init<>())
+        .def_readwrite("on_save", &MenuBarPanel::onSave)
+        .def_readwrite("on_new_scene", &MenuBarPanel::onNewScene)
+        .def_readwrite("on_request_close", &MenuBarPanel::onRequestClose)
+        .def_readwrite("on_undo", &MenuBarPanel::onUndo)
+        .def_readwrite("on_redo", &MenuBarPanel::onRedo)
+        .def_readwrite("can_undo", &MenuBarPanel::canUndo)
+        .def_readwrite("can_redo", &MenuBarPanel::canRedo)
+        .def_readwrite("get_registered_types", &MenuBarPanel::getRegisteredTypes)
+        .def_readwrite("get_open_windows", &MenuBarPanel::getOpenWindows)
+        .def_readwrite("open_window", &MenuBarPanel::openWindow)
+        .def_readwrite("close_window", &MenuBarPanel::closeWindow)
+        .def_readwrite("reset_layout", &MenuBarPanel::resetLayout)
+        .def_readwrite("is_close_requested", &MenuBarPanel::isCloseRequested)
+        .def_readwrite("toggle_build_settings", &MenuBarPanel::toggleBuildSettings)
+        .def_readwrite("toggle_preferences", &MenuBarPanel::togglePreferences)
+        .def_readwrite("toggle_physics_layer_matrix", &MenuBarPanel::togglePhysicsLayerMatrix)
+        .def_readwrite("is_build_settings_open", &MenuBarPanel::isBuildSettingsOpen)
+        .def_readwrite("is_preferences_open", &MenuBarPanel::isPreferencesOpen)
+        .def_readwrite("is_physics_layer_matrix_open", &MenuBarPanel::isPhysicsLayerMatrixOpen)
+        .def_readwrite("translate", &MenuBarPanel::translate);
 }
 
 } // namespace infernux

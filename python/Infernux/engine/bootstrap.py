@@ -237,7 +237,7 @@ class EditorBootstrap:
             "scene_view":         lambda: SceneViewPanel(engine=engine),
             "game_view":          lambda: GameViewPanel(engine=engine),
             "project":            lambda: ProjectPanel(root_path=project_path, engine=engine),
-            "toolbar":            lambda: ToolbarPanel(engine=engine),
+            "toolbar":            lambda: self._create_native_toolbar(engine),
             "tag_layer_settings": lambda: self._create_tag_layer_panel(),
         }
         for reg in PanelRegistry.get_registrations():
@@ -251,6 +251,90 @@ class EditorBootstrap:
         panel.set_project_path(self.project_path)
         return panel
 
+    def _create_native_toolbar(self, engine):
+        """Create a fresh C++ ToolbarPanel with all callbacks wired."""
+        from Infernux.lib import ToolbarPanel as NativeToolbarPanel
+        from Infernux.engine.i18n import t as _t
+        tb = NativeToolbarPanel()
+        tb.translate = _t
+        self._wire_toolbar_callbacks_on(tb, engine)
+        return tb
+
+    def _wire_toolbar_callbacks_on(self, tb, engine):
+        """Shared helper: attach play/camera/grid callbacks to a ToolbarPanel."""
+        pmm = engine._play_mode_manager if engine else None
+        from Infernux.lib import PlayState
+        from Infernux.engine.play_mode import PlayModeState
+        from Infernux.engine.ui.closable_panel import ClosablePanel
+
+        def _on_play():
+            if not pmm:
+                return
+            if pmm.is_playing:
+                pmm.exit_play_mode()
+            else:
+                if pmm.enter_play_mode():
+                    ClosablePanel.focus_panel_by_id("game_view")
+                    if engine:
+                        engine.select_docked_window("game_view")
+        def _on_pause():
+            if pmm:
+                pmm.toggle_pause()
+        def _on_step():
+            if pmm:
+                pmm.step_frame()
+        def _get_play_state():
+            if not pmm:
+                return PlayState.Edit
+            state = pmm.state
+            if state == PlayModeState.PLAYING:
+                return PlayState.Playing
+            elif state == PlayModeState.PAUSED:
+                return PlayState.Paused
+            return PlayState.Edit
+        def _get_play_time_str():
+            if not pmm:
+                return "00:00.000"
+            t = pmm.total_play_time
+            return f"{int(t//60):02d}:{t%60:06.3f}"
+
+        tb.on_play = _on_play
+        tb.on_pause = _on_pause
+        tb.on_step = _on_step
+        tb.get_play_state = _get_play_state
+        tb.get_play_time_str = _get_play_time_str
+
+        native = engine.get_native_engine() if engine else None
+        if native:
+            tb.is_show_grid = lambda: native.is_show_grid()
+            tb.set_show_grid = lambda v: native.set_show_grid(v)
+
+        def _sync_camera():
+            cam = engine.editor_camera if engine else None
+            if not cam:
+                return tb.get_camera_settings()
+            return {
+                "fov": float(cam.fov),
+                "rotation_speed": float(cam.rotation_speed),
+                "pan_speed": float(cam.pan_speed),
+                "zoom_speed": float(cam.zoom_speed),
+                "move_speed": float(cam.move_speed),
+                "move_speed_boost": float(cam.move_speed_boost),
+            }
+        def _apply_camera(settings):
+            cam = engine.editor_camera if engine else None
+            if not cam:
+                return
+            cam.fov = settings["fov"]
+            cam.rotation_speed = settings["rotation_speed"]
+            cam.pan_speed = settings["pan_speed"]
+            cam.zoom_speed = settings["zoom_speed"]
+            cam.move_speed = settings["move_speed"]
+            cam.move_speed_boost = settings["move_speed_boost"]
+
+        tb.sync_camera_from_engine = _sync_camera
+        tb.apply_camera_to_engine = _apply_camera
+
     # ── Phase 6: Create and register panels ────────────────────────────
 
     def _create_panels(self):
@@ -261,21 +345,27 @@ class EditorBootstrap:
         self.frame_scheduler = FrameSchedulerPanel(engine=engine)
         engine.register_gui("frame_scheduler", self.frame_scheduler)
 
-        # Menu bar
-        self.menu_bar = MenuBarPanel(engine)
-        self.menu_bar.set_window_manager(wm)
-        self.menu_bar.set_scene_file_manager(self.scene_file_manager)
+        # Menu bar (C++ native panel — replaces Python MenuBarPanel)
+        from Infernux.lib import MenuBarPanel as NativeMenuBarPanel
+        from Infernux.engine.i18n import t as _t
+        self.menu_bar = NativeMenuBarPanel()
+        self.menu_bar.translate = _t
+        self._wire_menu_bar_callbacks(wm)
         engine.register_gui("menu_bar", self.menu_bar)
 
-        # Toolbar
-        self.toolbar = ToolbarPanel(engine=engine)
-        self.toolbar.set_window_manager(wm)
+        # Toolbar (C++ native panel — replaces Python ToolbarPanel)
+        from Infernux.lib import ToolbarPanel as NativeToolbarPanel, PlayState
+        self.toolbar = NativeToolbarPanel()
+        self.toolbar.translate = _t
+        self._wire_toolbar_callbacks(engine)
         engine.register_gui("toolbar", self.toolbar)
         wm.register_existing_window("toolbar", self.toolbar, "toolbar")
 
         ts = _panel_state.get("toolbar")
         if ts:
-            self.toolbar.load_state(ts)
+            cam_settings = ts.get("camera_settings")
+            if cam_settings:
+                self.toolbar.set_camera_settings(cam_settings)
 
         # Hierarchy
         self.hierarchy = HierarchyPanel()
@@ -327,9 +417,11 @@ class EditorBootstrap:
                     _native_console.clear()
             engine._play_mode_manager.add_state_change_listener(_on_play_clear)
 
-        # Status bar
-        self.status_bar = StatusBarPanel()
+        # Status bar (C++ native panel — replaces Python StatusBarPanel)
+        from Infernux.lib import StatusBarPanel as NativeStatusBarPanel
+        self.status_bar = NativeStatusBarPanel()
         self.status_bar.set_console_panel(self.console)
+        self._wire_status_bar_listener()
         engine.register_gui("status_bar", self.status_bar)
 
         # Scene view
@@ -362,6 +454,163 @@ class EditorBootstrap:
             wm.load_state(ws)
 
         self._persist_editor_state()
+
+    # ── Native panel callback wiring ───────────────────────────────────
+
+    def _wire_menu_bar_callbacks(self, wm):
+        """Wire C++ MenuBarPanel callbacks to Python managers."""
+        mb = self.menu_bar
+        sfm = self.scene_file_manager
+        engine = self.engine
+
+        # Scene file operations
+        if sfm:
+            mb.on_save = lambda: sfm.save_current_scene()
+            mb.on_new_scene = lambda: sfm.new_scene()
+            mb.on_request_close = lambda: sfm.request_close()
+
+        # Undo
+        def _undo():
+            from Infernux.engine.undo import UndoManager
+            mgr = UndoManager.instance()
+            if mgr and mgr.can_undo:
+                mgr.undo()
+        def _redo():
+            from Infernux.engine.undo import UndoManager
+            mgr = UndoManager.instance()
+            if mgr and mgr.can_redo:
+                mgr.redo()
+        def _can_undo():
+            from Infernux.engine.undo import UndoManager
+            mgr = UndoManager.instance()
+            return bool(mgr and mgr.can_undo)
+        def _can_redo():
+            from Infernux.engine.undo import UndoManager
+            mgr = UndoManager.instance()
+            return bool(mgr and mgr.can_redo)
+
+        mb.on_undo = _undo
+        mb.on_redo = _redo
+        mb.can_undo = _can_undo
+        mb.can_redo = _can_redo
+
+        # Window management
+        from Infernux.lib import WindowTypeInfo
+        def _get_registered_types():
+            types = wm.get_registered_types()
+            result = []
+            for type_id, info in types.items():
+                wti = WindowTypeInfo()
+                wti.type_id = type_id
+                wti.display_name = info.display_name
+                wti.singleton = info.singleton
+                result.append(wti)
+            return result
+        def _get_open_windows():
+            return wm.get_open_windows()
+
+        mb.get_registered_types = _get_registered_types
+        mb.get_open_windows = _get_open_windows
+        mb.open_window = lambda tid: wm.open_window(tid)
+        mb.close_window = lambda tid: wm.close_window(tid)
+        mb.reset_layout = lambda: wm.reset_layout()
+
+        # Close request from C++ engine
+        native = engine.get_native_engine() if engine else None
+        if native:
+            mb.is_close_requested = lambda: native.is_close_requested()
+
+        # Floating sub-panels (still rendered from Python)
+        from Infernux.engine.ui.build_settings_panel import BuildSettingsPanel
+        from Infernux.engine.ui.preferences_panel import PreferencesPanel
+        from Infernux.engine.ui.tag_layer_settings import PhysicsLayerMatrixPanel
+        from Infernux.engine.project_context import get_project_root
+        self._build_settings = BuildSettingsPanel()
+        self._preferences = PreferencesPanel()
+        self._physics_layer_matrix = PhysicsLayerMatrixPanel()
+        self._physics_layer_matrix.set_project_path(get_project_root() or "")
+
+        mb.toggle_build_settings = lambda: (
+            self._build_settings.close() if self._build_settings.is_open
+            else self._build_settings.open()
+        )
+        mb.toggle_preferences = lambda: (
+            self._preferences.close() if self._preferences.is_open
+            else self._preferences.open()
+        )
+        mb.toggle_physics_layer_matrix = lambda: (
+            self._physics_layer_matrix.close() if self._physics_layer_matrix.is_open
+            else self._physics_layer_matrix.open()
+        )
+        mb.is_build_settings_open = lambda: self._build_settings.is_open
+        mb.is_preferences_open = lambda: self._preferences.is_open
+        mb.is_physics_layer_matrix_open = lambda: self._physics_layer_matrix.is_open
+
+        # Register a secondary renderable that draws the floating sub-panels
+        # and save-confirmation popup after the menu bar.
+        from Infernux.lib import InxGUIRenderable, InxGUIContext
+        _bs = self._build_settings
+        _pref = self._preferences
+        _plm = self._physics_layer_matrix
+        _sfm = sfm
+
+        class _MenuBarFloatingPanels(InxGUIRenderable):
+            def on_render(self, ctx: InxGUIContext):
+                _bs.render(ctx)
+                _pref.render(ctx)
+                _plm.render(ctx)
+                if _sfm:
+                    _sfm.render_confirmation_popup(ctx)
+
+        self._menu_bar_floats = _MenuBarFloatingPanels()
+        engine.register_gui("menu_bar_floats", self._menu_bar_floats)
+
+    def _wire_toolbar_callbacks(self, engine):
+        """Wire C++ ToolbarPanel callbacks to Python PlayModeManager."""
+        self._wire_toolbar_callbacks_on(self.toolbar, engine)
+
+    def _wire_status_bar_listener(self):
+        """Wire C++ StatusBarPanel to DebugConsole listener + EngineStatus."""
+        sb = self.status_bar
+
+        # Subscribe to DebugConsole for latest message + count updates
+        from Infernux.debug import DebugConsole, LogType
+        from Infernux.engine.ui.console_panel import ConsolePanel as PyConsolePanel
+
+        def _on_log_entry(entry):
+            if PyConsolePanel._is_internal(entry):
+                return
+            msg = PyConsolePanel._sanitize_text(getattr(entry, 'message', ''))
+            level_map = {
+                LogType.LOG: "info",
+                LogType.WARNING: "warning",
+                LogType.ERROR: "error",
+                LogType.ASSERT: "error",
+                LogType.EXCEPTION: "error",
+            }
+            level = level_map.get(entry.log_type, "info")
+            sb.set_latest_message(msg, level)
+            if level == "warning":
+                sb.increment_warn_count()
+            elif level == "error":
+                sb.increment_error_count()
+
+        console = DebugConsole.instance()
+        for entry in console.get_entries():
+            _on_log_entry(entry)
+        console.add_listener(_on_log_entry)
+
+        # Register a lightweight renderable that syncs EngineStatus each frame
+        from Infernux.lib import InxGUIRenderable, InxGUIContext
+        from Infernux.engine.ui.engine_status import EngineStatus
+
+        class _EngineStatusSync(InxGUIRenderable):
+            def on_render(self, ctx: InxGUIContext):
+                text, progress = EngineStatus.get()
+                sb.set_engine_status(text, progress)
+
+        self._engine_status_sync = _EngineStatusSync()
+        self.engine.register_gui("engine_status_sync", self._engine_status_sync)
 
     # ── Phase 7: Wire selection system ─────────────────────────────────
 
@@ -684,7 +933,9 @@ class EditorBootstrap:
         if self.console is None or self.project_panel is None or self.window_manager is None:
             return
         if self.toolbar is not None:
-            _panel_state.put("toolbar", self.toolbar.save_state())
+            _panel_state.put("toolbar", {
+                "camera_settings": self.toolbar.get_camera_settings(),
+            })
         if self.console is not None:
             _panel_state.put("console", {
                 "show_info": self.console.show_info,
