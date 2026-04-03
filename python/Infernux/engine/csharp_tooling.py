@@ -87,6 +87,51 @@ namespace Infernux
         }
     }
 
+    public readonly struct Quaternion
+    {
+        public float X { get; }
+        public float Y { get; }
+        public float Z { get; }
+        public float W { get; }
+
+        public Quaternion(float x, float y, float z, float w)
+        {
+            X = x;
+            Y = y;
+            Z = z;
+            W = w;
+        }
+
+        public static Quaternion identity => new(0f, 0f, 0f, 1f);
+
+        public static Vector3 operator *(Quaternion rotation, Vector3 point)
+        {
+            float x2 = rotation.X + rotation.X;
+            float y2 = rotation.Y + rotation.Y;
+            float z2 = rotation.Z + rotation.Z;
+            float xx2 = rotation.X * x2;
+            float yy2 = rotation.Y * y2;
+            float zz2 = rotation.Z * z2;
+            float xy2 = rotation.X * y2;
+            float xz2 = rotation.X * z2;
+            float yz2 = rotation.Y * z2;
+            float wx2 = rotation.W * x2;
+            float wy2 = rotation.W * y2;
+            float wz2 = rotation.W * z2;
+
+            return new Vector3(
+                (1f - (yy2 + zz2)) * point.X + (xy2 - wz2) * point.Y + (xz2 + wy2) * point.Z,
+                (xy2 + wz2) * point.X + (1f - (xx2 + zz2)) * point.Y + (yz2 - wx2) * point.Z,
+                (xz2 - wy2) * point.X + (yz2 + wx2) * point.Y + (1f - (xx2 + yy2)) * point.Z
+            );
+        }
+
+        public override string ToString()
+        {
+            return $"({X}, {Y}, {Z}, {W})";
+        }
+    }
+
     public sealed class GameObject
     {
         internal GameObject(long instanceId)
@@ -172,6 +217,9 @@ namespace Infernux
     public sealed class Transform
     {
         private readonly GameObject _gameObject;
+        private static readonly Vector3 ForwardAxis = new(0f, 0f, 1f);
+        private static readonly Vector3 RightAxis = new(1f, 0f, 0f);
+        private static readonly Vector3 UpAxis = new(0f, 1f, 0f);
 
         internal Transform(GameObject gameObject)
         {
@@ -198,12 +246,116 @@ namespace Infernux
             set => Managed.NativeApi.SetLocalScale(_gameObject.InstanceId, value);
         }
 
+        public Quaternion rotation
+        {
+            get => Managed.NativeApi.GetWorldRotation(_gameObject.InstanceId);
+            set => Managed.NativeApi.SetWorldRotation(_gameObject.InstanceId, value);
+        }
+
+        public Quaternion localRotation
+        {
+            get => Managed.NativeApi.GetLocalRotation(_gameObject.InstanceId);
+            set => Managed.NativeApi.SetLocalRotation(_gameObject.InstanceId, value);
+        }
+
+        public Vector3 eulerAngles
+        {
+            get => Managed.NativeApi.GetWorldEulerAngles(_gameObject.InstanceId);
+            set => Managed.NativeApi.SetWorldEulerAngles(_gameObject.InstanceId, value);
+        }
+
+        public Vector3 localEulerAngles
+        {
+            get => Managed.NativeApi.GetLocalEulerAngles(_gameObject.InstanceId);
+            set => Managed.NativeApi.SetLocalEulerAngles(_gameObject.InstanceId, value);
+        }
+
         public Transform? parent => Managed.NativeApi.GetParent(_gameObject.InstanceId);
         public int childCount => Managed.NativeApi.GetChildCount(_gameObject.InstanceId);
+        public Vector3 lossyScale => Managed.NativeApi.GetWorldScale(_gameObject.InstanceId);
+        public Transform root
+        {
+            get
+            {
+                Transform current = this;
+                while (current.parent is Transform next)
+                {
+                    current = next;
+                }
+
+                return current;
+            }
+        }
+        public Vector3 forward => rotation * ForwardAxis;
+        public Vector3 right => rotation * RightAxis;
+        public Vector3 up => rotation * UpAxis;
+        public Vector3 localForward => localRotation * ForwardAxis;
+        public Vector3 localRight => localRotation * RightAxis;
+        public Vector3 localUp => localRotation * UpAxis;
 
         public void Translate(Vector3 delta)
         {
             Managed.NativeApi.Translate(_gameObject.InstanceId, delta);
+        }
+
+        public void TranslateLocal(Vector3 delta)
+        {
+            Managed.NativeApi.TranslateLocal(_gameObject.InstanceId, delta);
+        }
+
+        public void Rotate(Vector3 eulerAngles)
+        {
+            Managed.NativeApi.Rotate(_gameObject.InstanceId, eulerAngles);
+        }
+
+        public void Rotate(Vector3 axis, float angle)
+        {
+            Managed.NativeApi.Rotate(_gameObject.InstanceId, axis, angle);
+        }
+
+        public void RotateAround(Vector3 point, Vector3 axis, float angle)
+        {
+            Managed.NativeApi.RotateAround(_gameObject.InstanceId, point, axis, angle);
+        }
+
+        public void LookAt(Vector3 target)
+        {
+            LookAt(target, UpAxis);
+        }
+
+        public void LookAt(Vector3 target, Vector3 up)
+        {
+            Managed.NativeApi.LookAt(_gameObject.InstanceId, target, up);
+        }
+
+        public Vector3 TransformPoint(Vector3 point)
+        {
+            return Managed.NativeApi.TransformPoint(_gameObject.InstanceId, point);
+        }
+
+        public Vector3 InverseTransformPoint(Vector3 point)
+        {
+            return Managed.NativeApi.InverseTransformPoint(_gameObject.InstanceId, point);
+        }
+
+        public Vector3 TransformDirection(Vector3 direction)
+        {
+            return Managed.NativeApi.TransformDirection(_gameObject.InstanceId, direction);
+        }
+
+        public Vector3 InverseTransformDirection(Vector3 direction)
+        {
+            return Managed.NativeApi.InverseTransformDirection(_gameObject.InstanceId, direction);
+        }
+
+        public Vector3 TransformVector(Vector3 vector)
+        {
+            return Managed.NativeApi.TransformVector(_gameObject.InstanceId, vector);
+        }
+
+        public Vector3 InverseTransformVector(Vector3 vector)
+        {
+            return Managed.NativeApi.InverseTransformVector(_gameObject.InstanceId, vector);
         }
 
         public void SetParent(Transform? parent, bool worldPositionStays = true)
@@ -220,6 +372,52 @@ namespace Infernux
         public Transform? Find(string name)
         {
             return Managed.NativeApi.FindChild(_gameObject.InstanceId, name);
+        }
+
+        public void DetachChildren()
+        {
+            Managed.NativeApi.DetachChildren(_gameObject.InstanceId);
+        }
+
+        public bool IsChildOf(Transform? parent)
+        {
+            if (parent is null)
+            {
+                return false;
+            }
+
+            Transform? current = this.parent;
+            while (current is not null)
+            {
+                if (current.gameObject.InstanceId == parent.gameObject.InstanceId)
+                {
+                    return true;
+                }
+
+                current = current.parent;
+            }
+
+            return false;
+        }
+
+        public int GetSiblingIndex()
+        {
+            return Managed.NativeApi.GetSiblingIndex(_gameObject.InstanceId);
+        }
+
+        public void SetSiblingIndex(int index)
+        {
+            Managed.NativeApi.SetSiblingIndex(_gameObject.InstanceId, index);
+        }
+
+        public void SetAsFirstSibling()
+        {
+            SetSiblingIndex(0);
+        }
+
+        public void SetAsLastSibling()
+        {
+            SetSiblingIndex(int.MaxValue);
         }
     }
 
@@ -367,13 +565,130 @@ namespace Infernux.Managed
         private delegate int SetLocalPositionDelegate(long gameObjectId, float x, float y, float z);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetWorldRotationDelegate(long gameObjectId, out float x, out float y, out float z, out float w);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetWorldRotationDelegate(long gameObjectId, float x, float y, float z, float w);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetLocalRotationDelegate(long gameObjectId, out float x, out float y, out float z, out float w);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetLocalRotationDelegate(long gameObjectId, float x, float y, float z, float w);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetWorldEulerAnglesDelegate(long gameObjectId, out float x, out float y, out float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetWorldEulerAnglesDelegate(long gameObjectId, float x, float y, float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetLocalEulerAnglesDelegate(long gameObjectId, out float x, out float y, out float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetLocalEulerAnglesDelegate(long gameObjectId, float x, float y, float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int TranslateDelegate(long gameObjectId, float x, float y, float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int TranslateLocalDelegate(long gameObjectId, float x, float y, float z);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int GetLocalScaleDelegate(long gameObjectId, out float x, out float y, out float z);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int SetLocalScaleDelegate(long gameObjectId, float x, float y, float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetWorldScaleDelegate(long gameObjectId, out float x, out float y, out float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int RotateEulerDelegate(long gameObjectId, float x, float y, float z);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int RotateAxisAngleDelegate(long gameObjectId, float axisX, float axisY, float axisZ, float angle);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int RotateAroundDelegate(
+            long gameObjectId,
+            float pointX,
+            float pointY,
+            float pointZ,
+            float axisX,
+            float axisY,
+            float axisZ,
+            float angle);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LookAtDelegate(
+            long gameObjectId,
+            float targetX,
+            float targetY,
+            float targetZ,
+            float upX,
+            float upY,
+            float upZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int TransformPointDelegate(
+            long gameObjectId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int InverseTransformPointDelegate(
+            long gameObjectId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int TransformDirectionDelegate(
+            long gameObjectId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int InverseTransformDirectionDelegate(
+            long gameObjectId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int TransformVectorDelegate(
+            long gameObjectId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int InverseTransformVectorDelegate(
+            long gameObjectId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate long GetParentDelegate(long gameObjectId);
@@ -389,6 +704,15 @@ namespace Infernux.Managed
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate long FindChildDelegate(long gameObjectId, IntPtr nameUtf8);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetSiblingIndexDelegate(long gameObjectId, out int siblingIndex);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetSiblingIndexDelegate(long gameObjectId, int siblingIndex);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int DetachChildrenDelegate(long gameObjectId);
 
         private static NativeLogDelegate? _log;
         private static FindGameObjectByNameDelegate? _findGameObjectByName;
@@ -410,14 +734,37 @@ namespace Infernux.Managed
         private static SetGameObjectLayerDelegate? _setGameObjectLayer;
         private static GetLocalPositionDelegate? _getLocalPosition;
         private static SetLocalPositionDelegate? _setLocalPosition;
+        private static GetWorldRotationDelegate? _getWorldRotation;
+        private static SetWorldRotationDelegate? _setWorldRotation;
+        private static GetLocalRotationDelegate? _getLocalRotation;
+        private static SetLocalRotationDelegate? _setLocalRotation;
+        private static GetWorldEulerAnglesDelegate? _getWorldEulerAngles;
+        private static SetWorldEulerAnglesDelegate? _setWorldEulerAngles;
+        private static GetLocalEulerAnglesDelegate? _getLocalEulerAngles;
+        private static SetLocalEulerAnglesDelegate? _setLocalEulerAngles;
         private static TranslateDelegate? _translate;
+        private static TranslateLocalDelegate? _translateLocal;
         private static GetLocalScaleDelegate? _getLocalScale;
         private static SetLocalScaleDelegate? _setLocalScale;
+        private static GetWorldScaleDelegate? _getWorldScale;
+        private static RotateEulerDelegate? _rotateEuler;
+        private static RotateAxisAngleDelegate? _rotateAxisAngle;
+        private static RotateAroundDelegate? _rotateAround;
+        private static LookAtDelegate? _lookAt;
+        private static TransformPointDelegate? _transformPoint;
+        private static InverseTransformPointDelegate? _inverseTransformPoint;
+        private static TransformDirectionDelegate? _transformDirection;
+        private static InverseTransformDirectionDelegate? _inverseTransformDirection;
+        private static TransformVectorDelegate? _transformVector;
+        private static InverseTransformVectorDelegate? _inverseTransformVector;
         private static GetParentDelegate? _getParent;
         private static SetParentDelegate? _setParent;
         private static GetChildCountDelegate? _getChildCount;
         private static GetChildDelegate? _getChild;
         private static FindChildDelegate? _findChild;
+        private static GetSiblingIndexDelegate? _getSiblingIndex;
+        private static SetSiblingIndexDelegate? _setSiblingIndex;
+        private static DetachChildrenDelegate? _detachChildren;
 
         public static void Register(
             IntPtr logFn,
@@ -440,14 +787,37 @@ namespace Infernux.Managed
             IntPtr setGameObjectLayerFn,
             IntPtr getLocalPositionFn,
             IntPtr setLocalPositionFn,
+            IntPtr getWorldRotationFn,
+            IntPtr setWorldRotationFn,
+            IntPtr getLocalRotationFn,
+            IntPtr setLocalRotationFn,
+            IntPtr getWorldEulerAnglesFn,
+            IntPtr setWorldEulerAnglesFn,
+            IntPtr getLocalEulerAnglesFn,
+            IntPtr setLocalEulerAnglesFn,
             IntPtr translateFn,
+            IntPtr translateLocalFn,
             IntPtr getLocalScaleFn,
             IntPtr setLocalScaleFn,
+            IntPtr getWorldScaleFn,
+            IntPtr rotateEulerFn,
+            IntPtr rotateAxisAngleFn,
+            IntPtr rotateAroundFn,
+            IntPtr lookAtFn,
+            IntPtr transformPointFn,
+            IntPtr inverseTransformPointFn,
+            IntPtr transformDirectionFn,
+            IntPtr inverseTransformDirectionFn,
+            IntPtr transformVectorFn,
+            IntPtr inverseTransformVectorFn,
             IntPtr getParentFn,
             IntPtr setParentFn,
             IntPtr getChildCountFn,
             IntPtr getChildFn,
-            IntPtr findChildFn)
+            IntPtr findChildFn,
+            IntPtr getSiblingIndexFn,
+            IntPtr setSiblingIndexFn,
+            IntPtr detachChildrenFn)
         {
             if (logFn == IntPtr.Zero || findGameObjectFn == IntPtr.Zero || createGameObjectFn == IntPtr.Zero ||
                 createPrimitiveFn == IntPtr.Zero || destroyGameObjectFn == IntPtr.Zero ||
@@ -459,10 +829,20 @@ namespace Infernux.Managed
                 getGameObjectTagFn == IntPtr.Zero || setGameObjectTagFn == IntPtr.Zero ||
                 compareGameObjectTagFn == IntPtr.Zero || getGameObjectLayerFn == IntPtr.Zero ||
                 setGameObjectLayerFn == IntPtr.Zero || getLocalPositionFn == IntPtr.Zero ||
-                setLocalPositionFn == IntPtr.Zero || translateFn == IntPtr.Zero ||
-                getLocalScaleFn == IntPtr.Zero || setLocalScaleFn == IntPtr.Zero ||
+                setLocalPositionFn == IntPtr.Zero || getWorldRotationFn == IntPtr.Zero ||
+                setWorldRotationFn == IntPtr.Zero || getLocalRotationFn == IntPtr.Zero ||
+                setLocalRotationFn == IntPtr.Zero || getWorldEulerAnglesFn == IntPtr.Zero ||
+                setWorldEulerAnglesFn == IntPtr.Zero || getLocalEulerAnglesFn == IntPtr.Zero ||
+                setLocalEulerAnglesFn == IntPtr.Zero || translateFn == IntPtr.Zero ||
+                translateLocalFn == IntPtr.Zero || getLocalScaleFn == IntPtr.Zero || setLocalScaleFn == IntPtr.Zero ||
+                getWorldScaleFn == IntPtr.Zero || rotateEulerFn == IntPtr.Zero || rotateAxisAngleFn == IntPtr.Zero ||
+                rotateAroundFn == IntPtr.Zero || lookAtFn == IntPtr.Zero || transformPointFn == IntPtr.Zero ||
+                inverseTransformPointFn == IntPtr.Zero || transformDirectionFn == IntPtr.Zero ||
+                inverseTransformDirectionFn == IntPtr.Zero || transformVectorFn == IntPtr.Zero ||
+                inverseTransformVectorFn == IntPtr.Zero ||
                 getParentFn == IntPtr.Zero || setParentFn == IntPtr.Zero || getChildCountFn == IntPtr.Zero ||
-                getChildFn == IntPtr.Zero || findChildFn == IntPtr.Zero)
+                getChildFn == IntPtr.Zero || findChildFn == IntPtr.Zero || getSiblingIndexFn == IntPtr.Zero ||
+                setSiblingIndexFn == IntPtr.Zero || detachChildrenFn == IntPtr.Zero)
             {
                 throw new InvalidOperationException("Managed native API registration received a null callback pointer.");
             }
@@ -491,14 +871,45 @@ namespace Infernux.Managed
             _setGameObjectLayer = Marshal.GetDelegateForFunctionPointer<SetGameObjectLayerDelegate>(setGameObjectLayerFn);
             _getLocalPosition = Marshal.GetDelegateForFunctionPointer<GetLocalPositionDelegate>(getLocalPositionFn);
             _setLocalPosition = Marshal.GetDelegateForFunctionPointer<SetLocalPositionDelegate>(setLocalPositionFn);
+            _getWorldRotation = Marshal.GetDelegateForFunctionPointer<GetWorldRotationDelegate>(getWorldRotationFn);
+            _setWorldRotation = Marshal.GetDelegateForFunctionPointer<SetWorldRotationDelegate>(setWorldRotationFn);
+            _getLocalRotation = Marshal.GetDelegateForFunctionPointer<GetLocalRotationDelegate>(getLocalRotationFn);
+            _setLocalRotation = Marshal.GetDelegateForFunctionPointer<SetLocalRotationDelegate>(setLocalRotationFn);
+            _getWorldEulerAngles =
+                Marshal.GetDelegateForFunctionPointer<GetWorldEulerAnglesDelegate>(getWorldEulerAnglesFn);
+            _setWorldEulerAngles =
+                Marshal.GetDelegateForFunctionPointer<SetWorldEulerAnglesDelegate>(setWorldEulerAnglesFn);
+            _getLocalEulerAngles =
+                Marshal.GetDelegateForFunctionPointer<GetLocalEulerAnglesDelegate>(getLocalEulerAnglesFn);
+            _setLocalEulerAngles =
+                Marshal.GetDelegateForFunctionPointer<SetLocalEulerAnglesDelegate>(setLocalEulerAnglesFn);
             _translate = Marshal.GetDelegateForFunctionPointer<TranslateDelegate>(translateFn);
+            _translateLocal = Marshal.GetDelegateForFunctionPointer<TranslateLocalDelegate>(translateLocalFn);
             _getLocalScale = Marshal.GetDelegateForFunctionPointer<GetLocalScaleDelegate>(getLocalScaleFn);
             _setLocalScale = Marshal.GetDelegateForFunctionPointer<SetLocalScaleDelegate>(setLocalScaleFn);
+            _getWorldScale = Marshal.GetDelegateForFunctionPointer<GetWorldScaleDelegate>(getWorldScaleFn);
+            _rotateEuler = Marshal.GetDelegateForFunctionPointer<RotateEulerDelegate>(rotateEulerFn);
+            _rotateAxisAngle = Marshal.GetDelegateForFunctionPointer<RotateAxisAngleDelegate>(rotateAxisAngleFn);
+            _rotateAround = Marshal.GetDelegateForFunctionPointer<RotateAroundDelegate>(rotateAroundFn);
+            _lookAt = Marshal.GetDelegateForFunctionPointer<LookAtDelegate>(lookAtFn);
+            _transformPoint = Marshal.GetDelegateForFunctionPointer<TransformPointDelegate>(transformPointFn);
+            _inverseTransformPoint =
+                Marshal.GetDelegateForFunctionPointer<InverseTransformPointDelegate>(inverseTransformPointFn);
+            _transformDirection =
+                Marshal.GetDelegateForFunctionPointer<TransformDirectionDelegate>(transformDirectionFn);
+            _inverseTransformDirection =
+                Marshal.GetDelegateForFunctionPointer<InverseTransformDirectionDelegate>(inverseTransformDirectionFn);
+            _transformVector = Marshal.GetDelegateForFunctionPointer<TransformVectorDelegate>(transformVectorFn);
+            _inverseTransformVector =
+                Marshal.GetDelegateForFunctionPointer<InverseTransformVectorDelegate>(inverseTransformVectorFn);
             _getParent = Marshal.GetDelegateForFunctionPointer<GetParentDelegate>(getParentFn);
             _setParent = Marshal.GetDelegateForFunctionPointer<SetParentDelegate>(setParentFn);
             _getChildCount = Marshal.GetDelegateForFunctionPointer<GetChildCountDelegate>(getChildCountFn);
             _getChild = Marshal.GetDelegateForFunctionPointer<GetChildDelegate>(getChildFn);
             _findChild = Marshal.GetDelegateForFunctionPointer<FindChildDelegate>(findChildFn);
+            _getSiblingIndex = Marshal.GetDelegateForFunctionPointer<GetSiblingIndexDelegate>(getSiblingIndexFn);
+            _setSiblingIndex = Marshal.GetDelegateForFunctionPointer<SetSiblingIndexDelegate>(setSiblingIndexFn);
+            _detachChildren = Marshal.GetDelegateForFunctionPointer<DetachChildrenDelegate>(detachChildrenFn);
         }
 
         public static void Log(int level, object? message)
@@ -817,6 +1228,94 @@ namespace Infernux.Managed
             }
         }
 
+        public static Quaternion GetWorldRotation(long gameObjectId)
+        {
+            GetWorldRotationDelegate callback =
+                _getWorldRotation ?? throw new InvalidOperationException("Native transform.rotation getter is not registered.");
+            if (callback(gameObjectId, out float x, out float y, out float z, out float w) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read world rotation for GameObject {gameObjectId}.");
+            }
+
+            return new Quaternion(x, y, z, w);
+        }
+
+        public static void SetWorldRotation(long gameObjectId, Quaternion rotation)
+        {
+            SetWorldRotationDelegate callback =
+                _setWorldRotation ?? throw new InvalidOperationException("Native transform.rotation setter is not registered.");
+            if (callback(gameObjectId, rotation.X, rotation.Y, rotation.Z, rotation.W) != 0)
+            {
+                throw new InvalidOperationException($"Failed to write world rotation for GameObject {gameObjectId}.");
+            }
+        }
+
+        public static Quaternion GetLocalRotation(long gameObjectId)
+        {
+            GetLocalRotationDelegate callback =
+                _getLocalRotation ?? throw new InvalidOperationException("Native transform.localRotation getter is not registered.");
+            if (callback(gameObjectId, out float x, out float y, out float z, out float w) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read local rotation for GameObject {gameObjectId}.");
+            }
+
+            return new Quaternion(x, y, z, w);
+        }
+
+        public static void SetLocalRotation(long gameObjectId, Quaternion rotation)
+        {
+            SetLocalRotationDelegate callback =
+                _setLocalRotation ?? throw new InvalidOperationException("Native transform.localRotation setter is not registered.");
+            if (callback(gameObjectId, rotation.X, rotation.Y, rotation.Z, rotation.W) != 0)
+            {
+                throw new InvalidOperationException($"Failed to write local rotation for GameObject {gameObjectId}.");
+            }
+        }
+
+        public static Vector3 GetWorldEulerAngles(long gameObjectId)
+        {
+            GetWorldEulerAnglesDelegate callback =
+                _getWorldEulerAngles ?? throw new InvalidOperationException("Native transform.eulerAngles getter is not registered.");
+            if (callback(gameObjectId, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read world euler angles for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static void SetWorldEulerAngles(long gameObjectId, Vector3 eulerAngles)
+        {
+            SetWorldEulerAnglesDelegate callback =
+                _setWorldEulerAngles ?? throw new InvalidOperationException("Native transform.eulerAngles setter is not registered.");
+            if (callback(gameObjectId, eulerAngles.X, eulerAngles.Y, eulerAngles.Z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to write world euler angles for GameObject {gameObjectId}.");
+            }
+        }
+
+        public static Vector3 GetLocalEulerAngles(long gameObjectId)
+        {
+            GetLocalEulerAnglesDelegate callback =
+                _getLocalEulerAngles ?? throw new InvalidOperationException("Native transform.localEulerAngles getter is not registered.");
+            if (callback(gameObjectId, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read local euler angles for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static void SetLocalEulerAngles(long gameObjectId, Vector3 eulerAngles)
+        {
+            SetLocalEulerAnglesDelegate callback =
+                _setLocalEulerAngles ?? throw new InvalidOperationException("Native transform.localEulerAngles setter is not registered.");
+            if (callback(gameObjectId, eulerAngles.X, eulerAngles.Y, eulerAngles.Z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to write local euler angles for GameObject {gameObjectId}.");
+            }
+        }
+
         public static void Translate(long gameObjectId, Vector3 delta)
         {
             TranslateDelegate callback =
@@ -824,6 +1323,16 @@ namespace Infernux.Managed
             if (callback(gameObjectId, delta.X, delta.Y, delta.Z) != 0)
             {
                 throw new InvalidOperationException($"Failed to translate GameObject {gameObjectId}.");
+            }
+        }
+
+        public static void TranslateLocal(long gameObjectId, Vector3 delta)
+        {
+            TranslateLocalDelegate callback =
+                _translateLocal ?? throw new InvalidOperationException("Native transform.TranslateLocal is not registered.");
+            if (callback(gameObjectId, delta.X, delta.Y, delta.Z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to local-translate GameObject {gameObjectId}.");
             }
         }
 
@@ -847,6 +1356,130 @@ namespace Infernux.Managed
             {
                 throw new InvalidOperationException($"Failed to write local scale for GameObject {gameObjectId}.");
             }
+        }
+
+        public static Vector3 GetWorldScale(long gameObjectId)
+        {
+            GetWorldScaleDelegate callback =
+                _getWorldScale ?? throw new InvalidOperationException("Native transform.lossyScale getter is not registered.");
+            if (callback(gameObjectId, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read world scale for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static void Rotate(long gameObjectId, Vector3 eulerAngles)
+        {
+            RotateEulerDelegate callback =
+                _rotateEuler ?? throw new InvalidOperationException("Native transform.Rotate(euler) is not registered.");
+            if (callback(gameObjectId, eulerAngles.X, eulerAngles.Y, eulerAngles.Z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to rotate GameObject {gameObjectId} by euler angles.");
+            }
+        }
+
+        public static void Rotate(long gameObjectId, Vector3 axis, float angle)
+        {
+            RotateAxisAngleDelegate callback =
+                _rotateAxisAngle ?? throw new InvalidOperationException("Native transform.Rotate(axis, angle) is not registered.");
+            if (callback(gameObjectId, axis.X, axis.Y, axis.Z, angle) != 0)
+            {
+                throw new InvalidOperationException($"Failed to rotate GameObject {gameObjectId} around an axis.");
+            }
+        }
+
+        public static void RotateAround(long gameObjectId, Vector3 point, Vector3 axis, float angle)
+        {
+            RotateAroundDelegate callback =
+                _rotateAround ?? throw new InvalidOperationException("Native transform.RotateAround is not registered.");
+            if (callback(gameObjectId, point.X, point.Y, point.Z, axis.X, axis.Y, axis.Z, angle) != 0)
+            {
+                throw new InvalidOperationException($"Failed to rotate GameObject {gameObjectId} around a point.");
+            }
+        }
+
+        public static void LookAt(long gameObjectId, Vector3 target, Vector3 up)
+        {
+            LookAtDelegate callback =
+                _lookAt ?? throw new InvalidOperationException("Native transform.LookAt is not registered.");
+            if (callback(gameObjectId, target.X, target.Y, target.Z, up.X, up.Y, up.Z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to make GameObject {gameObjectId} look at a target.");
+            }
+        }
+
+        public static Vector3 TransformPoint(long gameObjectId, Vector3 point)
+        {
+            TransformPointDelegate callback =
+                _transformPoint ?? throw new InvalidOperationException("Native transform.TransformPoint is not registered.");
+            if (callback(gameObjectId, point.X, point.Y, point.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to transform point for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Vector3 InverseTransformPoint(long gameObjectId, Vector3 point)
+        {
+            InverseTransformPointDelegate callback =
+                _inverseTransformPoint ?? throw new InvalidOperationException("Native transform.InverseTransformPoint is not registered.");
+            if (callback(gameObjectId, point.X, point.Y, point.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to inverse-transform point for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Vector3 TransformDirection(long gameObjectId, Vector3 direction)
+        {
+            TransformDirectionDelegate callback =
+                _transformDirection ?? throw new InvalidOperationException("Native transform.TransformDirection is not registered.");
+            if (callback(gameObjectId, direction.X, direction.Y, direction.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to transform direction for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Vector3 InverseTransformDirection(long gameObjectId, Vector3 direction)
+        {
+            InverseTransformDirectionDelegate callback =
+                _inverseTransformDirection ?? throw new InvalidOperationException("Native transform.InverseTransformDirection is not registered.");
+            if (callback(gameObjectId, direction.X, direction.Y, direction.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to inverse-transform direction for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Vector3 TransformVector(long gameObjectId, Vector3 vector)
+        {
+            TransformVectorDelegate callback =
+                _transformVector ?? throw new InvalidOperationException("Native transform.TransformVector is not registered.");
+            if (callback(gameObjectId, vector.X, vector.Y, vector.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to transform vector for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Vector3 InverseTransformVector(long gameObjectId, Vector3 vector)
+        {
+            InverseTransformVectorDelegate callback =
+                _inverseTransformVector ?? throw new InvalidOperationException("Native transform.InverseTransformVector is not registered.");
+            if (callback(gameObjectId, vector.X, vector.Y, vector.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to inverse-transform vector for GameObject {gameObjectId}.");
+            }
+
+            return new Vector3(x, y, z);
         }
 
         public static Transform? GetParent(long gameObjectId)
@@ -904,6 +1537,38 @@ namespace Infernux.Managed
                 {
                     Marshal.FreeCoTaskMem(namePtr);
                 }
+            }
+        }
+
+        public static int GetSiblingIndex(long gameObjectId)
+        {
+            GetSiblingIndexDelegate callback =
+                _getSiblingIndex ?? throw new InvalidOperationException("Native transform.GetSiblingIndex is not registered.");
+            if (callback(gameObjectId, out int siblingIndex) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read sibling index for GameObject {gameObjectId}.");
+            }
+
+            return siblingIndex;
+        }
+
+        public static void SetSiblingIndex(long gameObjectId, int siblingIndex)
+        {
+            SetSiblingIndexDelegate callback =
+                _setSiblingIndex ?? throw new InvalidOperationException("Native transform.SetSiblingIndex is not registered.");
+            if (callback(gameObjectId, siblingIndex) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set sibling index for GameObject {gameObjectId}.");
+            }
+        }
+
+        public static void DetachChildren(long gameObjectId)
+        {
+            DetachChildrenDelegate callback =
+                _detachChildren ?? throw new InvalidOperationException("Native transform.DetachChildren is not registered.");
+            if (callback(gameObjectId) != 0)
+            {
+                throw new InvalidOperationException($"Failed to detach children for GameObject {gameObjectId}.");
             }
         }
     }
@@ -1028,14 +1693,37 @@ namespace Infernux.Managed
             IntPtr setGameObjectLayerFn,
             IntPtr getLocalPositionFn,
             IntPtr setLocalPositionFn,
+            IntPtr getWorldRotationFn,
+            IntPtr setWorldRotationFn,
+            IntPtr getLocalRotationFn,
+            IntPtr setLocalRotationFn,
+            IntPtr getWorldEulerAnglesFn,
+            IntPtr setWorldEulerAnglesFn,
+            IntPtr getLocalEulerAnglesFn,
+            IntPtr setLocalEulerAnglesFn,
             IntPtr translateFn,
+            IntPtr translateLocalFn,
             IntPtr getLocalScaleFn,
             IntPtr setLocalScaleFn,
+            IntPtr getWorldScaleFn,
+            IntPtr rotateEulerFn,
+            IntPtr rotateAxisAngleFn,
+            IntPtr rotateAroundFn,
+            IntPtr lookAtFn,
+            IntPtr transformPointFn,
+            IntPtr inverseTransformPointFn,
+            IntPtr transformDirectionFn,
+            IntPtr inverseTransformDirectionFn,
+            IntPtr transformVectorFn,
+            IntPtr inverseTransformVectorFn,
             IntPtr getParentFn,
             IntPtr setParentFn,
             IntPtr getChildCountFn,
             IntPtr getChildFn,
             IntPtr findChildFn,
+            IntPtr getSiblingIndexFn,
+            IntPtr setSiblingIndexFn,
+            IntPtr detachChildrenFn,
             IntPtr errorUtf8,
             int errorUtf8Capacity)
         {
@@ -1062,14 +1750,37 @@ namespace Infernux.Managed
                     setGameObjectLayerFn,
                     getLocalPositionFn,
                     setLocalPositionFn,
+                    getWorldRotationFn,
+                    setWorldRotationFn,
+                    getLocalRotationFn,
+                    setLocalRotationFn,
+                    getWorldEulerAnglesFn,
+                    setWorldEulerAnglesFn,
+                    getLocalEulerAnglesFn,
+                    setLocalEulerAnglesFn,
                     translateFn,
+                    translateLocalFn,
                     getLocalScaleFn,
                     setLocalScaleFn,
+                    getWorldScaleFn,
+                    rotateEulerFn,
+                    rotateAxisAngleFn,
+                    rotateAroundFn,
+                    lookAtFn,
+                    transformPointFn,
+                    inverseTransformPointFn,
+                    transformDirectionFn,
+                    inverseTransformDirectionFn,
+                    transformVectorFn,
+                    inverseTransformVectorFn,
                     getParentFn,
                     setParentFn,
                     getChildCountFn,
                     getChildFn,
-                    findChildFn);
+                    findChildFn,
+                    getSiblingIndexFn,
+                    setSiblingIndexFn,
+                    detachChildrenFn);
                 return 0;
             }
             catch (Exception ex)

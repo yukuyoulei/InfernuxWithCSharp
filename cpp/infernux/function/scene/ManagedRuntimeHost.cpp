@@ -74,15 +74,54 @@ using set_game_object_layer_fn = int32_t(__cdecl *)(int64_t game_object_id, int3
 using get_game_object_local_position_fn =
     int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z);
 using set_game_object_local_position_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
+using get_game_object_world_rotation_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z, float *w);
+using set_game_object_world_rotation_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float w);
+using get_game_object_local_rotation_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z, float *w);
+using set_game_object_local_rotation_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float w);
+using get_game_object_world_euler_angles_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z);
+using set_game_object_world_euler_angles_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
+using get_game_object_local_euler_angles_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z);
+using set_game_object_local_euler_angles_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
 using translate_game_object_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
+using translate_game_object_local_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
 using get_game_object_local_scale_fn = int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z);
 using set_game_object_local_scale_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
+using get_game_object_world_scale_fn = int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z);
+using rotate_game_object_euler_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
+using rotate_game_object_axis_angle_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float axis_x, float axis_y, float axis_z, float angle);
+using rotate_game_object_around_fn = int32_t(__cdecl *)(int64_t game_object_id, float point_x, float point_y,
+                                                        float point_z, float axis_x, float axis_y, float axis_z,
+                                                        float angle);
+using look_at_game_object_fn = int32_t(__cdecl *)(int64_t game_object_id, float target_x, float target_y, float target_z,
+                                                  float up_x, float up_y, float up_z);
+using transform_point_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using inverse_transform_point_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using transform_direction_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using inverse_transform_direction_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using transform_vector_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using inverse_transform_vector_fn =
+    int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
 using get_transform_parent_fn = int64_t(__cdecl *)(int64_t game_object_id);
 using set_transform_parent_fn = int32_t(__cdecl *)(int64_t game_object_id, int64_t parent_game_object_id,
                                                    int32_t world_position_stays);
 using get_transform_child_count_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t *count_out);
 using get_transform_child_fn = int64_t(__cdecl *)(int64_t game_object_id, int32_t index);
 using find_transform_child_fn = int64_t(__cdecl *)(int64_t game_object_id, const char *name_utf8);
+using get_transform_sibling_index_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t *index_out);
+using set_transform_sibling_index_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t index);
+using detach_transform_children_fn = int32_t(__cdecl *)(int64_t game_object_id);
 using register_native_api_fn =
     int(__cdecl *)(native_log_fn log_fn, find_game_object_by_name_fn find_game_object_fn,
                    create_game_object_fn create_game_object_fn, create_primitive_fn create_primitive_fn,
@@ -96,12 +135,31 @@ using register_native_api_fn =
                    set_game_object_tag_fn set_tag_fn, compare_game_object_tag_fn compare_tag_fn,
                    get_game_object_layer_fn get_layer_fn, set_game_object_layer_fn set_layer_fn,
                    get_game_object_local_position_fn get_local_position_fn,
-                   set_game_object_local_position_fn set_local_position_fn, translate_game_object_fn translate_fn,
+                   set_game_object_local_position_fn set_local_position_fn,
+                   get_game_object_world_rotation_fn get_world_rotation_fn,
+                   set_game_object_world_rotation_fn set_world_rotation_fn,
+                   get_game_object_local_rotation_fn get_local_rotation_fn,
+                   set_game_object_local_rotation_fn set_local_rotation_fn,
+                   get_game_object_world_euler_angles_fn get_world_euler_angles_fn,
+                   set_game_object_world_euler_angles_fn set_world_euler_angles_fn,
+                   get_game_object_local_euler_angles_fn get_local_euler_angles_fn,
+                   set_game_object_local_euler_angles_fn set_local_euler_angles_fn, translate_game_object_fn translate_fn,
+                   translate_game_object_local_fn translate_local_fn,
                    get_game_object_local_scale_fn get_local_scale_fn,
-                   set_game_object_local_scale_fn set_local_scale_fn, get_transform_parent_fn get_parent_fn,
+                   set_game_object_local_scale_fn set_local_scale_fn,
+                   get_game_object_world_scale_fn get_world_scale_fn, rotate_game_object_euler_fn rotate_euler_fn,
+                   rotate_game_object_axis_angle_fn rotate_axis_angle_fn,
+                   rotate_game_object_around_fn rotate_around_fn, look_at_game_object_fn look_at_fn,
+                   transform_point_fn transform_point_callback, inverse_transform_point_fn inverse_transform_point_callback,
+                   transform_direction_fn transform_direction_callback,
+                   inverse_transform_direction_fn inverse_transform_direction_callback,
+                   transform_vector_fn transform_vector_callback,
+                   inverse_transform_vector_fn inverse_transform_vector_callback, get_transform_parent_fn get_parent_fn,
                    set_transform_parent_fn set_parent_fn, get_transform_child_count_fn get_child_count_fn,
-                   get_transform_child_fn get_child_fn, find_transform_child_fn find_child_fn, char *error_utf8,
-                   int32_t error_utf8_capacity);
+                   get_transform_child_fn get_child_fn, find_transform_child_fn find_child_fn,
+                   get_transform_sibling_index_fn get_sibling_index_fn,
+                   set_transform_sibling_index_fn set_sibling_index_fn,
+                   detach_transform_children_fn detach_children_fn, char *error_utf8, int32_t error_utf8_capacity);
 
 constexpr int32_t kHostFxrDelegateLoadAssemblyAndGetFunctionPointer = 5;
 const wchar_t *const kUnmanagedCallersOnlyMethod = reinterpret_cast<const wchar_t *>(static_cast<intptr_t>(-1));
@@ -328,6 +386,25 @@ void __cdecl NativeLog(int level, const char *messageUtf8)
     }
 
     ForwardManagedLogToDebugConsole(level, messageUtf8);
+}
+
+Transform *FindActiveSceneTransform(int64_t gameObjectId)
+{
+    if (gameObjectId <= 0) {
+        return nullptr;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return nullptr;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject) {
+        return nullptr;
+    }
+
+    return gameObject->GetTransform();
 }
 
 int64_t __cdecl FindGameObjectByName(const char *nameUtf8)
@@ -747,6 +824,152 @@ int32_t __cdecl SetGameObjectLocalPosition(int64_t gameObjectId, float x, float 
     return 0;
 }
 
+int32_t __cdecl GetGameObjectWorldRotation(int64_t gameObjectId, float *x, float *y, float *z, float *w)
+{
+    if (gameObjectId <= 0 || !x || !y || !z || !w) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    const glm::quat rotation = gameObject->GetTransform()->GetRotation();
+    *x = rotation.x;
+    *y = rotation.y;
+    *z = rotation.z;
+    *w = rotation.w;
+    return 0;
+}
+
+int32_t __cdecl SetGameObjectWorldRotation(int64_t gameObjectId, float x, float y, float z, float w)
+{
+    if (gameObjectId <= 0) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    gameObject->GetTransform()->SetRotation(glm::quat(w, x, y, z));
+    return 0;
+}
+
+int32_t __cdecl GetGameObjectLocalRotation(int64_t gameObjectId, float *x, float *y, float *z, float *w)
+{
+    if (gameObjectId <= 0 || !x || !y || !z || !w) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    const glm::quat rotation = gameObject->GetTransform()->GetLocalRotation();
+    *x = rotation.x;
+    *y = rotation.y;
+    *z = rotation.z;
+    *w = rotation.w;
+    return 0;
+}
+
+int32_t __cdecl SetGameObjectLocalRotation(int64_t gameObjectId, float x, float y, float z, float w)
+{
+    if (gameObjectId <= 0) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    gameObject->GetTransform()->SetLocalRotation(glm::quat(w, x, y, z));
+    return 0;
+}
+
+int32_t __cdecl GetGameObjectWorldEulerAngles(int64_t gameObjectId, float *x, float *y, float *z)
+{
+    if (gameObjectId <= 0 || !x || !y || !z) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 eulerAngles = transform->GetEulerAngles();
+    *x = eulerAngles.x;
+    *y = eulerAngles.y;
+    *z = eulerAngles.z;
+    return 0;
+}
+
+int32_t __cdecl SetGameObjectWorldEulerAngles(int64_t gameObjectId, float x, float y, float z)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->SetEulerAngles(x, y, z);
+    return 0;
+}
+
+int32_t __cdecl GetGameObjectLocalEulerAngles(int64_t gameObjectId, float *x, float *y, float *z)
+{
+    if (gameObjectId <= 0 || !x || !y || !z) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 eulerAngles = transform->GetLocalEulerAngles();
+    *x = eulerAngles.x;
+    *y = eulerAngles.y;
+    *z = eulerAngles.z;
+    return 0;
+}
+
+int32_t __cdecl SetGameObjectLocalEulerAngles(int64_t gameObjectId, float x, float y, float z)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->SetLocalEulerAngles(x, y, z);
+    return 0;
+}
+
 int32_t __cdecl TranslateGameObject(int64_t gameObjectId, float x, float y, float z)
 {
     if (gameObjectId <= 0) {
@@ -764,6 +987,17 @@ int32_t __cdecl TranslateGameObject(int64_t gameObjectId, float x, float y, floa
     }
 
     gameObject->GetTransform()->Translate(glm::vec3(x, y, z));
+    return 0;
+}
+
+int32_t __cdecl TranslateLocalGameObject(int64_t gameObjectId, float x, float y, float z)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->TranslateLocal(glm::vec3(x, y, z));
     return 0;
 }
 
@@ -807,6 +1041,184 @@ int32_t __cdecl SetGameObjectLocalScale(int64_t gameObjectId, float x, float y, 
     }
 
     gameObject->GetTransform()->SetLocalScale(x, y, z);
+    return 0;
+}
+
+int32_t __cdecl GetGameObjectWorldScale(int64_t gameObjectId, float *x, float *y, float *z)
+{
+    if (gameObjectId <= 0 || !x || !y || !z) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 worldScale = transform->GetWorldScale();
+    *x = worldScale.x;
+    *y = worldScale.y;
+    *z = worldScale.z;
+    return 0;
+}
+
+int32_t __cdecl RotateGameObjectEuler(int64_t gameObjectId, float x, float y, float z)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->Rotate(glm::vec3(x, y, z));
+    return 0;
+}
+
+int32_t __cdecl RotateGameObjectAxisAngle(int64_t gameObjectId, float axisX, float axisY, float axisZ, float angle)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->Rotate(glm::vec3(axisX, axisY, axisZ), angle);
+    return 0;
+}
+
+int32_t __cdecl RotateAroundGameObject(int64_t gameObjectId, float pointX, float pointY, float pointZ, float axisX,
+                                       float axisY, float axisZ, float angle)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->RotateAround(glm::vec3(pointX, pointY, pointZ), glm::vec3(axisX, axisY, axisZ), angle);
+    return 0;
+}
+
+int32_t __cdecl LookAtGameObject(int64_t gameObjectId, float targetX, float targetY, float targetZ, float upX, float upY,
+                                 float upZ)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->LookAt(glm::vec3(targetX, targetY, targetZ), glm::vec3(upX, upY, upZ));
+    return 0;
+}
+
+int32_t __cdecl TransformPointGameObject(int64_t gameObjectId, float x, float y, float z, float *outX, float *outY,
+                                         float *outZ)
+{
+    if (gameObjectId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 point = transform->TransformPoint(glm::vec3(x, y, z));
+    *outX = point.x;
+    *outY = point.y;
+    *outZ = point.z;
+    return 0;
+}
+
+int32_t __cdecl InverseTransformPointGameObject(int64_t gameObjectId, float x, float y, float z, float *outX, float *outY,
+                                                float *outZ)
+{
+    if (gameObjectId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 point = transform->InverseTransformPoint(glm::vec3(x, y, z));
+    *outX = point.x;
+    *outY = point.y;
+    *outZ = point.z;
+    return 0;
+}
+
+int32_t __cdecl TransformDirectionGameObject(int64_t gameObjectId, float x, float y, float z, float *outX, float *outY,
+                                             float *outZ)
+{
+    if (gameObjectId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 direction = transform->TransformDirection(glm::vec3(x, y, z));
+    *outX = direction.x;
+    *outY = direction.y;
+    *outZ = direction.z;
+    return 0;
+}
+
+int32_t __cdecl InverseTransformDirectionGameObject(int64_t gameObjectId, float x, float y, float z, float *outX,
+                                                    float *outY, float *outZ)
+{
+    if (gameObjectId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 direction = transform->InverseTransformDirection(glm::vec3(x, y, z));
+    *outX = direction.x;
+    *outY = direction.y;
+    *outZ = direction.z;
+    return 0;
+}
+
+int32_t __cdecl TransformVectorGameObject(int64_t gameObjectId, float x, float y, float z, float *outX, float *outY,
+                                          float *outZ)
+{
+    if (gameObjectId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 vector = transform->TransformVector(glm::vec3(x, y, z));
+    *outX = vector.x;
+    *outY = vector.y;
+    *outZ = vector.z;
+    return 0;
+}
+
+int32_t __cdecl InverseTransformVectorGameObject(int64_t gameObjectId, float x, float y, float z, float *outX, float *outY,
+                                                 float *outZ)
+{
+    if (gameObjectId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    const glm::vec3 vector = transform->InverseTransformVector(glm::vec3(x, y, z));
+    *outX = vector.x;
+    *outY = vector.y;
+    *outZ = vector.z;
     return 0;
 }
 
@@ -917,6 +1329,66 @@ int64_t __cdecl FindTransformChild(int64_t gameObjectId, const char *nameUtf8)
 
     Transform *child = gameObject->GetTransform()->Find(nameUtf8);
     return child && child->GetGameObject() ? static_cast<int64_t>(child->GetGameObject()->GetID()) : 0;
+}
+
+int32_t __cdecl GetTransformSiblingIndex(int64_t gameObjectId, int32_t *indexOut)
+{
+    if (gameObjectId <= 0 || !indexOut) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    *indexOut = gameObject->GetTransform()->GetSiblingIndex();
+    return 0;
+}
+
+int32_t __cdecl SetTransformSiblingIndex(int64_t gameObjectId, int32_t index)
+{
+    if (gameObjectId <= 0) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    gameObject->GetTransform()->SetSiblingIndex(index);
+    return 0;
+}
+
+int32_t __cdecl DetachTransformChildren(int64_t gameObjectId)
+{
+    if (gameObjectId <= 0) {
+        return 1;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 1;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject || !gameObject->GetTransform()) {
+        return 1;
+    }
+
+    gameObject->GetTransform()->DetachChildren();
+    return 0;
 }
 
 std::filesystem::path FindBestHostFxr()
@@ -1373,10 +1845,18 @@ bool ManagedRuntimeHost::BindBridgeDelegates()
                                 &GetGameObjectName, &SetGameObjectName, &SetGameObjectActive,
                                 &GetGameObjectActiveSelf, &GetGameObjectActiveInHierarchy, &GetGameObjectTag,
                                 &SetGameObjectTag, &CompareGameObjectTag, &GetGameObjectLayer, &SetGameObjectLayer,
-                                &GetGameObjectLocalPosition, &SetGameObjectLocalPosition, &TranslateGameObject,
-                                &GetGameObjectLocalScale, &SetGameObjectLocalScale, &GetTransformParent,
-                                &SetTransformParent, &GetTransformChildCount, &GetTransformChild,
-                                &FindTransformChild)) {
+                                &GetGameObjectLocalPosition, &SetGameObjectLocalPosition, &GetGameObjectWorldRotation,
+                                &SetGameObjectWorldRotation, &GetGameObjectLocalRotation, &SetGameObjectLocalRotation,
+                                &GetGameObjectWorldEulerAngles, &SetGameObjectWorldEulerAngles,
+                                &GetGameObjectLocalEulerAngles, &SetGameObjectLocalEulerAngles, &TranslateGameObject,
+                                &TranslateLocalGameObject, &GetGameObjectLocalScale, &SetGameObjectLocalScale,
+                                &GetGameObjectWorldScale, &RotateGameObjectEuler, &RotateGameObjectAxisAngle,
+                                &RotateAroundGameObject, &LookAtGameObject, &TransformPointGameObject,
+                                &InverseTransformPointGameObject, &TransformDirectionGameObject,
+                                &InverseTransformDirectionGameObject, &TransformVectorGameObject,
+                                &InverseTransformVectorGameObject, &GetTransformParent,
+                                &SetTransformParent, &GetTransformChildCount, &GetTransformChild, &FindTransformChild,
+                                &GetTransformSiblingIndex, &SetTransformSiblingIndex, &DetachTransformChildren)) {
         SetError(error.empty() ? "Managed bridge failed to register native API callbacks." : error);
         return false;
     }

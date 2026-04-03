@@ -119,12 +119,42 @@ User gameplay scripts currently inherit from `InxComponent`.
 - `position`
 - `localPosition`
 - `localScale`
+- `lossyScale`
+- `rotation`
+- `localRotation`
+- `eulerAngles`
+- `localEulerAngles`
 - `parent`
+- `root`
 - `childCount`
+- `forward`
+- `right`
+- `up`
+- `localForward`
+- `localRight`
+- `localUp`
 - `Translate(Vector3)`
+- `TranslateLocal(Vector3)`
+- `Rotate(Vector3)`
+- `Rotate(Vector3, float)`
+- `RotateAround(Vector3, Vector3, float)`
+- `LookAt(Vector3)`
+- `LookAt(Vector3, Vector3)`
+- `TransformPoint(Vector3)`
+- `InverseTransformPoint(Vector3)`
+- `TransformDirection(Vector3)`
+- `InverseTransformDirection(Vector3)`
+- `TransformVector(Vector3)`
+- `InverseTransformVector(Vector3)`
 - `SetParent(Transform? parent, bool worldPositionStays = true)`
 - `GetChild(int)`
 - `Find(string)`
+- `DetachChildren()`
+- `IsChildOf(Transform?)`
+- `GetSiblingIndex()`
+- `SetSiblingIndex(int)`
+- `SetAsFirstSibling()`
+- `SetAsLastSibling()`
 
 `Debug`
 
