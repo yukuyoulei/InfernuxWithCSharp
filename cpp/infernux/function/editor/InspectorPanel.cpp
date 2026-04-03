@@ -320,16 +320,13 @@ float InspectorPanel::RenderSplitter(InxGUIContext * /*ctx*/, float totalHeight)
 
 void InspectorPanel::RenderSingleObject(InxGUIContext *ctx, uint64_t objId)
 {
-    // Fetch object info (cached per frame)
-    if (objId != m_cachedObjInfoId && getObjectInfo)
-    {
+    if (getObjectInfo)
         m_cachedObjInfo = getObjectInfo(objId);
-        m_cachedObjInfoId = objId;
-        if (!m_cachedObjInfo.prefabGuid.empty() && getPrefabInfo)
-            m_cachedPrefabInfo = getPrefabInfo(objId);
-        else
-            m_cachedPrefabInfo = {};
-    }
+    m_cachedObjInfoId = objId;
+    if (!m_cachedObjInfo.prefabGuid.empty() && getPrefabInfo)
+        m_cachedPrefabInfo = getPrefabInfo(objId);
+    else
+        m_cachedPrefabInfo = {};
 
     const auto &info = m_cachedObjInfo;
     const auto &pinfo = m_cachedPrefabInfo;
@@ -545,6 +542,7 @@ void InspectorPanel::RenderObjectHeader(InxGUIContext *ctx, uint64_t objId, cons
     bool newActive = RenderInspectorCheckbox(ctx, "##obj_active", active);
     if (newActive != active && setObjectProperty)
     {
+        m_cachedObjInfo.active = newActive;
         setObjectProperty(objId, "active", newActive ? "true" : "false");
     }
 
@@ -560,6 +558,7 @@ void InspectorPanel::RenderObjectHeader(InxGUIContext *ctx, uint64_t objId, cons
         std::string newName(nameBuf);
         if (newName != info.name && setObjectProperty)
         {
+            m_cachedObjInfo.name = newName;
             setObjectProperty(objId, "name", newName);
         }
     }
@@ -630,6 +629,7 @@ void InspectorPanel::RenderTagLayerRow(InxGUIContext *ctx, uint64_t objId, const
         }
         else if (newTagIdx >= 0 && newTagIdx < static_cast<int>(m_cachedTags.size()))
         {
+            m_cachedObjInfo.tag = m_cachedTags[newTagIdx];
             if (setObjectProperty)
                 setObjectProperty(objId, "tag", m_cachedTags[newTagIdx]);
         }
@@ -652,6 +652,7 @@ void InspectorPanel::RenderTagLayerRow(InxGUIContext *ctx, uint64_t objId, const
         }
         else if (setObjectProperty)
         {
+            m_cachedObjInfo.layer = newLayer;
             setObjectProperty(objId, "layer", std::to_string(newLayer));
         }
     }

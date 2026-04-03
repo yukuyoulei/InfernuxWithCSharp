@@ -1436,6 +1436,7 @@ class EditorBootstrap:
         ip = self.inspector_panel
         engine = self.engine
         from Infernux.engine.i18n import t as _t
+        from Infernux.engine.ui import inspector_panel as _legacy_inspector_panel
 
         # ── Translation ────────────────────────────────────────────────
         ip.translate = _t
@@ -1448,6 +1449,111 @@ class EditorBootstrap:
 
         # ── Object info ────────────────────────────────────────────────
         from Infernux.lib import SceneManager, InspectorObjectInfo
+
+        _component_cache = {
+            "object_id": 0,
+            "scene_version": -1,
+            "structure_version": -1,
+            "items": [],
+            "native_map": {},
+            "py_map": {},
+        }
+
+        def _invalidate_component_cache():
+            _component_cache["object_id"] = 0
+            _component_cache["scene_version"] = -1
+            _component_cache["structure_version"] = -1
+            _component_cache["items"] = []
+            _component_cache["native_map"] = {}
+            _component_cache["py_map"] = {}
+
+        def _current_scene_and_versions():
+            scene = SceneManager.instance().get_active_scene()
+            scene_version = getattr(scene, 'structure_version', -1) if scene else -1
+            structure_version = getattr(_legacy_inspector_panel, '_component_structure_version', 0)
+            return scene, scene_version, structure_version
+
+        def _get_component_payload(obj_id):
+            scene, scene_version, structure_version = _current_scene_and_versions()
+            if (
+                _component_cache["object_id"] == obj_id
+                and _component_cache["scene_version"] == scene_version
+                and _component_cache["structure_version"] == structure_version
+            ):
+                items = _component_cache["items"]
+                native_map = _component_cache["native_map"]
+                py_map = _component_cache["py_map"]
+                stale = False
+                for item in items:
+                    comp = native_map.get(item.component_id) if item.is_native else py_map.get(item.component_id)
+                    if comp is None:
+                        stale = True
+                        break
+                    item.enabled = bool(getattr(comp, 'enabled', True))
+                    if not item.is_native:
+                        item.is_broken = bool(getattr(comp, '_is_broken', False))
+                        item.broken_error = (
+                            getattr(comp, '_broken_error', '') or ''
+                            if item.is_broken else ''
+                        )
+                if not stale:
+                    return scene, _component_cache["items"], native_map, py_map
+
+            obj = scene.find_by_id(obj_id) if scene else None
+            if obj is None:
+                _invalidate_component_cache()
+                return scene, [], {}, {}
+
+            items = []
+            native_map = {}
+            py_map = {}
+
+            for comp in (obj.get_components() or []):
+                if _is_python_component_entry(comp):
+                    continue
+                comp_type_name = getattr(comp, 'type_name', type(comp).__name__)
+                if comp_type_name == "Transform":
+                    continue
+                comp_id = getattr(comp, 'component_id', id(comp))
+                ci = InspectorComponentInfo()
+                ci.type_name = comp_type_name
+                ci.component_id = comp_id
+                ci.enabled = bool(getattr(comp, 'enabled', True))
+                ci.is_native = True
+                ci.is_script = False
+                ci.is_broken = False
+                items.append(ci)
+                native_map[comp_id] = comp
+
+            for py_comp in (obj.get_py_components() or []):
+                comp_id = getattr(py_comp, 'component_id', id(py_comp))
+                ci = InspectorComponentInfo()
+                ci.type_name = getattr(py_comp, 'type_name', type(py_comp).__name__)
+                ci.component_id = comp_id
+                ci.enabled = bool(getattr(py_comp, 'enabled', True))
+                ci.is_native = False
+                ci.is_script = True
+                ci.is_broken = bool(getattr(py_comp, '_is_broken', False))
+                ci.broken_error = (
+                    getattr(py_comp, '_broken_error', '') or ''
+                    if ci.is_broken else ''
+                )
+                items.append(ci)
+                py_map[comp_id] = py_comp
+
+            _component_cache["object_id"] = obj_id
+            _component_cache["scene_version"] = scene_version
+            _component_cache["structure_version"] = structure_version
+            _component_cache["items"] = items
+            _component_cache["native_map"] = native_map
+            _component_cache["py_map"] = py_map
+            return scene, items, native_map, py_map
+
+        def _resolve_component(obj_id, comp_id, is_native):
+            _scene, _items, native_map, py_map = _get_component_payload(obj_id)
+            if is_native:
+                return native_map.get(comp_id)
+            return py_map.get(comp_id)
 
         def _get_object_info(obj_id):
             info = InspectorObjectInfo()
@@ -1536,40 +1642,8 @@ class EditorBootstrap:
             return isinstance(component, InxComponent) or hasattr(component, 'get_py_component')
 
         def _get_component_list(obj_id):
-            result = []
-            scene = SceneManager.instance().get_active_scene()
-            obj = scene.find_by_id(obj_id) if scene else None
-            if obj is None:
-                return result
-            # C++ components (skip Python components and Transform)
-            for comp in (obj.get_components() or []):
-                if _is_python_component_entry(comp):
-                    continue
-                comp_type_name = getattr(comp, 'type_name', type(comp).__name__)
-                if comp_type_name == "Transform":
-                    continue  # rendered separately by the C++ shell
-                ci = InspectorComponentInfo()
-                ci.type_name = comp_type_name
-                ci.component_id = getattr(comp, 'component_id', id(comp))
-                ci.enabled = bool(getattr(comp, 'enabled', True))
-                ci.is_native = True
-                ci.is_script = False
-                ci.is_broken = False
-                result.append(ci)
-            # Python components
-            for py_comp in (obj.get_py_components() or []):
-                ci = InspectorComponentInfo()
-                ci.type_name = getattr(py_comp, 'type_name', type(py_comp).__name__)
-                ci.component_id = getattr(py_comp, 'component_id', id(py_comp))
-                ci.enabled = bool(getattr(py_comp, 'enabled', True))
-                ci.is_native = False
-                ci.is_script = True
-                _is_broken = getattr(py_comp, '_is_broken', False)
-                ci.is_broken = bool(_is_broken)
-                if ci.is_broken:
-                    ci.broken_error = getattr(py_comp, '_broken_error', '') or ''
-                result.append(ci)
-            return result
+            _scene, items, _native_map, _py_map = _get_component_payload(obj_id)
+            return items
 
         ip.get_component_list = _get_component_list
 
@@ -1622,41 +1696,33 @@ class EditorBootstrap:
         from Infernux.engine.ui import inspector_components as comp_ui
 
         def _render_component_body(ctx, obj_id, type_name, comp_id, is_native):
-            scene = SceneManager.instance().get_active_scene()
-            obj = scene.find_by_id(obj_id) if scene else None
-            if obj is None:
+            comp = _resolve_component(obj_id, comp_id, is_native)
+            if comp is None:
                 return
             if is_native:
-                for comp in (obj.get_components() or []):
-                    cid = getattr(comp, 'component_id', id(comp))
-                    if cid == comp_id:
-                        comp_ui.render_component(ctx, comp)
-                        return
+                comp_ui.render_component(ctx, comp)
+                return
             else:
-                for py_comp in (obj.get_py_components() or []):
-                    cid = getattr(py_comp, 'component_id', id(py_comp))
-                    if cid == comp_id:
-                        # Check for broken script
-                        _script_err = None
-                        if getattr(py_comp, '_is_broken', False):
-                            _script_err = getattr(py_comp, '_broken_error', '') or 'Script failed to load'
-                        else:
-                            _py_guid = getattr(py_comp, '_script_guid', None)
-                            adb = engine.get_asset_database()
-                            if _py_guid and adb:
-                                from Infernux.components.script_loader import get_script_error_by_path
-                                _py_path = adb.get_path_from_guid(_py_guid)
-                                if _py_path:
-                                    _script_err = get_script_error_by_path(_py_path)
-                        if _script_err:
-                            from Infernux.engine.ui.theme import Theme, ImGuiCol
-                            ctx.push_style_color(ImGuiCol.Text, *Theme.ERROR_TEXT)
-                            ctx.text_wrapped(_script_err)
-                            ctx.pop_style_color(1)
-                        else:
-                            from Infernux.engine.ui.inspector_components import render_py_component
-                            render_py_component(ctx, py_comp)
-                        return
+                _script_err = None
+                if getattr(comp, '_is_broken', False):
+                    _script_err = getattr(comp, '_broken_error', '') or 'Script failed to load'
+                else:
+                    _py_guid = getattr(comp, '_script_guid', None)
+                    adb = engine.get_asset_database()
+                    if _py_guid and adb:
+                        from Infernux.components.script_loader import get_script_error_by_path
+                        _py_path = adb.get_path_from_guid(_py_guid)
+                        if _py_path:
+                            _script_err = get_script_error_by_path(_py_path)
+                if _script_err:
+                    from Infernux.engine.ui.theme import Theme, ImGuiCol
+                    ctx.push_style_color(ImGuiCol.Text, *Theme.ERROR_TEXT)
+                    ctx.text_wrapped(_script_err)
+                    ctx.pop_style_color(1)
+                else:
+                    from Infernux.engine.ui.inspector_components import render_py_component
+                    render_py_component(ctx, comp)
+                return
 
         ip.render_component_body = _render_component_body
 
@@ -1688,25 +1754,17 @@ class EditorBootstrap:
             return True
 
         def _render_component_context_menu(ctx, obj_id, type_name, comp_id, is_native):
+            popup_id = "comp_ctx" if is_native else "py_comp_ctx"
+            if not ctx.begin_popup_context_item(popup_id):
+                return False
             scene = SceneManager.instance().get_active_scene()
             obj = scene.find_by_id(obj_id) if scene else None
             if obj is None:
+                ctx.end_popup()
                 return False
-            comp = None
-            if is_native:
-                for c in (obj.get_components() or []):
-                    if getattr(c, 'component_id', id(c)) == comp_id:
-                        comp = c
-                        break
-            else:
-                for c in (obj.get_py_components() or []):
-                    if getattr(c, 'component_id', id(c)) == comp_id:
-                        comp = c
-                        break
+            comp = _resolve_component(obj_id, comp_id, is_native)
             if comp is None:
-                return False
-            popup_id = "comp_ctx" if is_native else "py_comp_ctx"
-            if not ctx.begin_popup_context_item(popup_id):
+                ctx.end_popup()
                 return False
             # Copy
             if ctx.selectable(_t("inspector.copy_properties")):
@@ -1722,17 +1780,23 @@ class EditorBootstrap:
                     mgr = UndoManager.instance()
                     if mgr:
                         mgr.execute(RemoveNativeComponentCommand(obj.id, type_name, comp))
+                        _invalidate_component_cache()
                     elif obj.remove_component(comp) is False:
                         ctx.end_popup()
                         return False
+                    else:
+                        _invalidate_component_cache()
                 else:
                     from Infernux.engine.undo import UndoManager, RemovePyComponentCommand
                     mgr = UndoManager.instance()
                     if mgr:
                         mgr.execute(RemovePyComponentCommand(obj.id, comp))
+                        _invalidate_component_cache()
                     elif obj.remove_py_component(comp) is False:
                         ctx.end_popup()
                         return False
+                    else:
+                        _invalidate_component_cache()
                 ctx.end_popup()
                 return True
             ctx.end_popup()
@@ -1742,23 +1806,22 @@ class EditorBootstrap:
 
         # ── Component enabled toggle ───────────────────────────────────
         def _set_component_enabled(obj_id, comp_id, new_enabled, is_native):
-            scene = SceneManager.instance().get_active_scene()
-            obj = scene.find_by_id(obj_id) if scene else None
-            if obj is None:
+            comp = _resolve_component(obj_id, comp_id, is_native)
+            if comp is None:
                 return
-            comps = obj.get_components() if is_native else obj.get_py_components()
-            for comp in (comps or []):
-                if getattr(comp, 'component_id', id(comp)) == comp_id:
-                    from Infernux.engine.undo import UndoManager, SetPropertyCommand
-                    mgr = UndoManager.instance()
-                    old_val = comp.enabled
-                    if mgr:
-                        mgr.execute(SetPropertyCommand(
-                            comp, "enabled", old_val, new_enabled,
-                            f"Toggle {getattr(comp, 'type_name', '?')}"))
-                    else:
-                        comp.enabled = new_enabled
-                    return
+            from Infernux.engine.undo import UndoManager, SetPropertyCommand
+            mgr = UndoManager.instance()
+            old_val = comp.enabled
+            if mgr:
+                mgr.execute(SetPropertyCommand(
+                    comp, "enabled", old_val, new_enabled,
+                    f"Toggle {getattr(comp, 'type_name', '?')}"))
+            else:
+                comp.enabled = new_enabled
+            for item in _component_cache["items"]:
+                if item.component_id == comp_id:
+                    item.enabled = bool(new_enabled)
+                    break
 
         ip.set_component_enabled = _set_component_enabled
 
@@ -1841,6 +1904,7 @@ class EditorBootstrap:
                     Debug.log_internal(f"Added component: {type_name_or_path}")
                     _record_add_component_compound(
                         obj, type_name_or_path, result, before_ids, is_py=False)
+                    _invalidate_component_cache()
                 else:
                     Debug.log_error(f"Failed to add component: {type_name_or_path}")
             else:
@@ -1870,6 +1934,7 @@ class EditorBootstrap:
                     obj.add_py_component(instance)
                     _record_add_component_compound(
                         obj, comp_cls.__name__, instance, before_ids, is_py=True)
+                    _invalidate_component_cache()
                     Debug.log_internal(f"Added component {comp_cls.__name__}")
                 else:
                     from Infernux.components import load_and_create_component
@@ -1886,6 +1951,7 @@ class EditorBootstrap:
                     _record_add_component_compound(
                         obj, component_instance.type_name,
                         component_instance, before_ids, is_py=True)
+                    _invalidate_component_cache()
                     Debug.log_internal(f"Added component {component_instance.type_name}")
 
         ip.add_component = _add_component
@@ -1896,25 +1962,32 @@ class EditorBootstrap:
             obj = scene.find_by_id(obj_id) if scene else None
             if obj is None:
                 return False
-            comps = obj.get_components() if is_native else obj.get_py_components()
-            for comp in (comps or []):
-                if getattr(comp, 'component_id', id(comp)) == comp_id:
-                    if not _can_remove_component(obj, comp, type_name, is_native):
-                        return False
-                    from Infernux.engine.undo import UndoManager
-                    mgr = UndoManager.instance()
-                    if is_native:
-                        from Infernux.engine.undo import RemoveNativeComponentCommand
-                        if mgr:
-                            mgr.execute(RemoveNativeComponentCommand(obj.id, type_name, comp))
-                            return True
-                        return obj.remove_component(comp) is not False
-                    else:
-                        from Infernux.engine.undo import RemovePyComponentCommand
-                        if mgr:
-                            mgr.execute(RemovePyComponentCommand(obj.id, comp))
-                            return True
-                        return obj.remove_py_component(comp) is not False
+            comp = _resolve_component(obj_id, comp_id, is_native)
+            if comp is not None:
+                if not _can_remove_component(obj, comp, type_name, is_native):
+                    return False
+                from Infernux.engine.undo import UndoManager
+                mgr = UndoManager.instance()
+                if is_native:
+                    from Infernux.engine.undo import RemoveNativeComponentCommand
+                    if mgr:
+                        mgr.execute(RemoveNativeComponentCommand(obj.id, type_name, comp))
+                        _invalidate_component_cache()
+                        return True
+                    ok = obj.remove_component(comp) is not False
+                    if ok:
+                        _invalidate_component_cache()
+                    return ok
+                else:
+                    from Infernux.engine.undo import RemovePyComponentCommand
+                    if mgr:
+                        mgr.execute(RemovePyComponentCommand(obj.id, comp))
+                        _invalidate_component_cache()
+                        return True
+                    ok = obj.remove_py_component(comp) is not False
+                    if ok:
+                        _invalidate_component_cache()
+                    return ok
             return False
 
         ip.remove_component = _remove_component
@@ -2033,6 +2106,7 @@ class EditorBootstrap:
             mgr = UndoManager.instance()
             if mgr:
                 mgr.execute(AddPyComponentCommand(obj.id, script_path))
+                _invalidate_component_cache()
 
         ip.handle_script_drop = _handle_script_drop
 
