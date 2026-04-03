@@ -157,6 +157,7 @@ class ResourceChangeHandler(FileSystemEventHandler):
             else:
                 self._engine.delete_resources(path)
             if self._is_script_source(path):
+                self._queue_script_reload(path)
                 rm = ResourcesManager.instance()
                 if rm is not None:
                     rm.notify_script_catalog_changed(path, "deleted")
@@ -282,19 +283,35 @@ class ResourceChangeHandler(FileSystemEventHandler):
     
     def process_pending_reloads(self):
         """Process pending script reloads. Call this from main thread (e.g., in update loop)."""
-        self._process_pending_deletes()
-        with self._queue_lock:
-            pending = list(self._pending_reload_queue)
-            self._pending_reload_queue.clear()
-        
-        for item in pending:
-            try:
-                if isinstance(item, tuple) and item[0] == "shader":
-                    self._reload_shader(item[1])
-                elif isinstance(item, str):
-                    self._check_script(item)
-            except Exception as exc:
-                Debug.log_error(f"Reload failed for {item}: {exc}")
+        while True:
+            self._process_pending_deletes()
+            with self._queue_lock:
+                pending = list(self._pending_reload_queue)
+                self._pending_reload_queue.clear()
+
+            if not pending:
+                break
+
+            csharp_groups = {}
+            for item in pending:
+                try:
+                    if isinstance(item, tuple) and item[0] == "shader":
+                        self._reload_shader(item[1])
+                    elif isinstance(item, str) and self._is_csharp_script(item):
+                        project_key = self._get_csharp_project_key(item)
+                        files = csharp_groups.setdefault(project_key, [])
+                        if item not in files:
+                            files.append(item)
+                    elif isinstance(item, str):
+                        self._check_script(item)
+                except Exception as exc:
+                    Debug.log_error(f"Reload failed for {item}: {exc}")
+
+            for files in csharp_groups.values():
+                try:
+                    self._check_csharp_project_group(files)
+                except Exception as exc:
+                    Debug.log_error(f"C# auto-compile failed for {files[0] if files else '<unknown>'}: {exc}")
     
     def _check_script(self, file_path: str):
         """Validate a script source and hot-reload Python components when applicable."""
@@ -328,6 +345,50 @@ class ResourceChangeHandler(FileSystemEventHandler):
                 play_mode = PlayModeManager.instance()
                 if play_mode:
                     play_mode.reload_components_from_script(file_path)
+
+    def _check_csharp_project_group(self, file_paths):
+        from Infernux.engine.ui.engine_status import EngineStatus
+
+        if not file_paths:
+            return
+
+        unique_paths = []
+        seen = set()
+        for path in file_paths:
+            normalized = self._normalized_path(path)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_paths.append(path)
+
+        representative = next((path for path in unique_paths if os.path.exists(path)), unique_paths[0])
+        EngineStatus.set("Compiling C# scripts...", -1.0)
+        errors = self._script_compiler.check_file(representative)
+        if errors:
+            self._apply_script_errors(representative, errors)
+            EngineStatus.flash("C# compile failed", 0.0, duration=2.0)
+            for error in errors:
+                Debug.log_error(
+                    f"Script Error in {os.path.basename(error.file_path)}:{error.line_number}\n{error.message}",
+                    source_file=error.file_path,
+                    source_line=error.line_number,
+                )
+            return
+
+        self._clear_script_errors(representative)
+        Debug.log_internal(
+            f"[OK] Auto-compiled C# project: {os.path.basename(self._get_csharp_project_key(representative))} "
+            f"({len(unique_paths)} changed file{'s' if len(unique_paths) != 1 else ''})"
+        )
+        EngineStatus.flash("C# scripts compiled", 1.0, duration=1.5)
+
+        rm = ResourcesManager.instance()
+        if rm is not None:
+            for file_path in unique_paths:
+                rm.notify_script_catalog_changed(file_path, "modified")
+                abs_path = os.path.abspath(file_path)
+                for cb in list(rm._script_reload_callbacks.get(abs_path, [])):
+                    cb(file_path)
 
     def _reload_shader(self, file_path: str):
         """Reload a shader file and update the rendering pipeline."""

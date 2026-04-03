@@ -205,6 +205,14 @@ class PlayModeManager:
             Debug.log_warning("Cannot enter play mode: not in edit mode")
             return False
 
+        try:
+            from Infernux.engine.resources_manager import ResourcesManager
+            rm = ResourcesManager.instance()
+            if rm is not None:
+                rm.process_pending_reloads()
+        except Exception as exc:
+            Debug.log_warning(f"Failed to flush pending script reloads before Play Mode: {exc}")
+
         # Block play mode while editing a prefab
         from Infernux.engine.scene_manager import SceneFileManager
         sfm = SceneFileManager.instance()

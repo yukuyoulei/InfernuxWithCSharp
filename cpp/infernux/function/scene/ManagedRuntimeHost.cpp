@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string_view>
 #include <vector>
@@ -110,6 +112,14 @@ std::wstring ToWide(const std::string &utf8)
     return ToFsPath(utf8).wstring();
 }
 
+std::string TrimAscii(std::string value)
+{
+    auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
 std::string ReadUtf8Buffer(const std::array<char, 2048> &buffer)
 {
     auto end = std::find(buffer.begin(), buffer.end(), '\0');
@@ -141,6 +151,20 @@ int32_t WriteUtf8ToBuffer(const std::string &value, char *destinationUtf8, int32
     }
     destinationUtf8[copyCount] = '\0';
     return 0;
+}
+
+bool TrySetManagedArtifactsFromRoot(const std::filesystem::path &root, std::string &assemblyPathOut,
+                                    std::string &runtimeConfigPathOut)
+{
+    const std::filesystem::path assembly = root / "Infernux.GameScripts.dll";
+    const std::filesystem::path runtimeConfig = root / "Infernux.GameScripts.runtimeconfig.json";
+    if (!std::filesystem::is_regular_file(assembly) || !std::filesystem::is_regular_file(runtimeConfig)) {
+        return false;
+    }
+
+    assemblyPathOut = FromFsPath(assembly);
+    runtimeConfigPathOut = FromFsPath(runtimeConfig);
+    return true;
 }
 
 bool InvokeManaged(create_component_fn fn, const std::string &typeName, int64_t &handle, std::string &error)
@@ -1082,6 +1106,19 @@ bool ManagedRuntimeHost::ResolveManagedArtifacts()
         return true;
     }
 
+    const std::filesystem::path autoBuildPointer =
+        ToFsPath(JoinPath({m_projectPath, "Scripts", "obj", "InfernuxAutoBuild", "current.txt"}));
+    if (std::filesystem::is_regular_file(autoBuildPointer)) {
+        std::ifstream stream(autoBuildPointer);
+        std::string rootText;
+        if (std::getline(stream, rootText)) {
+            const std::filesystem::path root = ToFsPath(TrimAscii(rootText));
+            if (TrySetManagedArtifactsFromRoot(root, m_assemblyPath, m_runtimeConfigPath)) {
+                return true;
+            }
+        }
+    }
+
     const std::vector<std::filesystem::path> candidateRoots = {
         ToFsPath(JoinPath({m_projectPath, "Data", "Managed"})),
         ToFsPath(JoinPath({m_projectPath, "Scripts", "bin", "Debug", "net8.0"})),
@@ -1089,11 +1126,7 @@ bool ManagedRuntimeHost::ResolveManagedArtifacts()
     };
 
     for (const auto &root : candidateRoots) {
-        const std::filesystem::path assembly = root / "Infernux.GameScripts.dll";
-        const std::filesystem::path runtimeConfig = root / "Infernux.GameScripts.runtimeconfig.json";
-        if (std::filesystem::is_regular_file(assembly) && std::filesystem::is_regular_file(runtimeConfig)) {
-            m_assemblyPath = FromFsPath(assembly);
-            m_runtimeConfigPath = FromFsPath(runtimeConfig);
+        if (TrySetManagedArtifactsFromRoot(root, m_assemblyPath, m_runtimeConfigPath)) {
             return true;
         }
     }

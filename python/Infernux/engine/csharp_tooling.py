@@ -6,6 +6,8 @@ CSHARP_PROJECT_DIR = "Scripts"
 CSHARP_PROJECT_FILE = "Infernux.GameScripts.csproj"
 CSHARP_GENERATED_DIR = os.path.join(CSHARP_PROJECT_DIR, "Generated")
 CSHARP_STUBS_FILE = os.path.join(CSHARP_GENERATED_DIR, "Infernux.RuntimeStubs.cs")
+CSHARP_AUTOBUILD_ROOT = os.path.join(CSHARP_PROJECT_DIR, "obj", "InfernuxAutoBuild")
+CSHARP_AUTOBUILD_POINTER = os.path.join(CSHARP_AUTOBUILD_ROOT, "current.txt")
 DEFAULT_CSHARP_SCRIPT = os.path.join("Assets", "Scripts", "Main.cs")
 
 

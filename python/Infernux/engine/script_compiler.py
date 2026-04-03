@@ -13,10 +13,15 @@ import os
 import py_compile
 import re
 import subprocess
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import List, Optional
 
-from Infernux.engine.csharp_tooling import ensure_csharp_tooling
+from Infernux.engine.csharp_tooling import (
+    CSHARP_AUTOBUILD_POINTER,
+    CSHARP_AUTOBUILD_ROOT,
+    ensure_csharp_tooling,
+)
 from Infernux.debug import Debug
 from Infernux.engine.project_context import get_project_root
 
@@ -53,7 +58,12 @@ class ScriptCompiler:
     def check_file(self, file_path: str) -> List[ScriptError]:
         errors: List[ScriptError] = []
 
+        lower_path = file_path.lower()
         if not os.path.exists(file_path):
+            if lower_path.endswith(".cs"):
+                errors = self._check_csharp_project(file_path)
+                self._last_errors = errors
+                return errors
             errors.append(
                 ScriptError(
                     file_path=file_path,
@@ -63,9 +73,9 @@ class ScriptCompiler:
                     error_type="file",
                 )
             )
+            self._last_errors = errors
             return errors
 
-        lower_path = file_path.lower()
         if lower_path.endswith(".py"):
             errors = self._check_python_file(file_path)
         elif lower_path.endswith(".cs"):
@@ -167,8 +177,20 @@ class ScriptCompiler:
             ]
 
         try:
+            project_root = os.path.dirname(os.path.dirname(csproj_path))
+            output_dir = self._create_csharp_autobuild_output_dir(project_root)
             completed = subprocess.run(
-                ["dotnet", "build", csproj_path, "-nologo", "-clp:ErrorsOnly"],
+                [
+                    "dotnet",
+                    "build",
+                    csproj_path,
+                    "-c",
+                    "Debug",
+                    "-nologo",
+                    "-clp:ErrorsOnly",
+                    "-o",
+                    output_dir,
+                ],
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -176,8 +198,11 @@ class ScriptCompiler:
                 encoding="utf-8",
                 errors="replace",
                 timeout=180,
+                cwd=os.path.dirname(csproj_path),
             )
             if completed.returncode == 0:
+                self._write_csharp_autobuild_pointer(project_root, output_dir)
+                self._prune_stale_csharp_autobuilds(project_root, keep=8)
                 return []
         except FileNotFoundError:
             return [
@@ -215,6 +240,48 @@ class ScriptCompiler:
             ]
 
         return []
+
+    def _create_csharp_autobuild_output_dir(self, project_root: str) -> str:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        output_dir = os.path.join(project_root, CSHARP_AUTOBUILD_ROOT, "Debug", stamp)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def _write_csharp_autobuild_pointer(self, project_root: str, output_dir: str) -> None:
+        pointer_path = os.path.join(project_root, CSHARP_AUTOBUILD_POINTER)
+        os.makedirs(os.path.dirname(pointer_path), exist_ok=True)
+        with open(pointer_path, "w", encoding="utf-8") as f:
+            f.write(os.path.abspath(output_dir))
+            f.write("\n")
+
+    def _prune_stale_csharp_autobuilds(self, project_root: str, *, keep: int = 8) -> None:
+        debug_root = os.path.join(project_root, CSHARP_AUTOBUILD_ROOT, "Debug")
+        if not os.path.isdir(debug_root):
+            return
+
+        try:
+            candidates = [
+                os.path.join(debug_root, name)
+                for name in os.listdir(debug_root)
+                if os.path.isdir(os.path.join(debug_root, name))
+            ]
+        except OSError:
+            return
+
+        if len(candidates) <= keep:
+            return
+
+        candidates.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        for stale_dir in candidates[keep:]:
+            try:
+                for root, dirs, files in os.walk(stale_dir, topdown=False):
+                    for name in files:
+                        os.remove(os.path.join(root, name))
+                    for name in dirs:
+                        os.rmdir(os.path.join(root, name))
+                os.rmdir(stale_dir)
+            except OSError:
+                continue
 
     def _find_csharp_project(self, file_path: str) -> str:
         project_root = get_project_root()
