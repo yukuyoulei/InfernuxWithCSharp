@@ -5,275 +5,320 @@
 <h1 align="center">Infernux</h1>
 
 <p align="center">
-  <strong>开源游戏引擎，采用 C++17 / Vulkan 原生运行时，以及负责生产工作流的 Python 层。</strong>
+  <strong>Windows-first open-source game engine with a C++17 / Vulkan runtime, a Python editor layer, and an in-progress C# gameplay runtime.</strong>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
   <img src="https://img.shields.io/badge/version-0.1.1-orange.svg" alt="Version" />
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey.svg" alt="Platform" />
-  <img src="https://img.shields.io/badge/python-3.12+-brightgreen.svg" alt="Python" />
+  <img src="https://img.shields.io/badge/python-3.12%2B-brightgreen.svg" alt="Python" />
+  <img src="https://img.shields.io/badge/.NET-8-blue.svg" alt=".NET 8" />
   <img src="https://img.shields.io/badge/C%2B%2B-17-blue.svg" alt="C++ 17" />
   <img src="https://img.shields.io/badge/graphics-Vulkan-red.svg" alt="Vulkan" />
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> ·
-  <a href="https://chenlizheme.github.io/Infernux/">官网</a> ·
-  <a href="https://chenlizheme.github.io/Infernux/wiki.html">文档</a> ·
-  <a href="#快速开始">快速开始</a>
+  <a href="README.md">中文 README</a> |
+  <a href="https://chenlizheme.github.io/Infernux/">Website</a> |
+  <a href="https://chenlizheme.github.io/Infernux/wiki.html">Docs</a>
 </p>
 
 ---
 
-## 项目概览
+## Overview
 
-Infernux 是一个从零开始构建的引擎，目标不是把所有东西都做成黑盒，而是让你真正掌控运行时、工具链和迭代流程。
+Infernux is a from-scratch engine for teams that want to own the runtime, the tools, and the iteration loop.
 
-这个项目由三部分组成：
+Today the project is best described as:
 
-- 原生 C++17 / Vulkan 运行时，负责渲染、场景系统、平台服务和物理。
-- Python 层，负责玩法逻辑、编辑器工具、内容工作流和渲染栈编排。
-- MIT 协议，不收版税，不收运行时费用，也不把核心能力关在闭源层里。
+- a native C++17 / Vulkan engine runtime
+- a Python-based editor, tooling, and asset workflow layer
+- a Windows-only native CLR host for managed C# gameplay scripts
 
-核心思路很简单：性能敏感的部分留在原生层，日常开发最频繁的部分交给 Python，同时把架构保持在一个能读懂、能扩展、能接管的状态。
+The hot path stays native, the editor stays scriptable, and the gameplay surface is gradually moving from Python gameplay scripts toward C# runtime components.
 
-## 为什么是 Infernux
+## Current State
 
-- 渲染可编排：RenderGraph 和 RenderStack 对脚本开放，不需要完全依赖封闭的编辑器配置。
-- Python 用在迭代环路里：玩法、编辑器扩展、资产工作流、自动化脚本都能放在一个生态中完成。
-- 仓库优先：项目默认你会去读代码、改代码，而不是把引擎当成不可触碰的黑盒。
-- 范围表述诚实：当前版本是 Windows 上的技术预览版，核心能力可用，但还不是一个完成态的跨平台商业引擎。
+The repository is a Windows technical preview with real engine/editor functionality, not a finished multi-platform product.
 
-## 当前状态
+What is already working:
 
-目前已经具备一套可以继续向真实项目推进的基础能力：
+- Vulkan forward and deferred rendering, PBR, shadows, post-processing, RenderGraph, and RenderStack
+- Jolt physics, scene hierarchy, prefabs, GUID-based assets, and dependency tracking
+- Built-in editor panels including Hierarchy, Inspector, Scene View, Game View, Project, Console, and UI tooling
+- Python editor/tooling layer for workflows, automation, and authoring
+- Native CLR hosting on Windows through `hostfxr`
+- C# runtime component lifecycle and a growing engine bridge
 
-- Vulkan 前向/延迟渲染、PBR、级联阴影、MSAA、Shader 反射、后处理。
-- 可从 Python 编排的 RenderGraph / RenderStack 渲染体系。
-- Jolt 物理，支持刚体、碰撞体、查询、回调和层过滤。
-- SDL3 音频、GUID 资产系统、依赖追踪、场景与资源管理。
-- 内置编辑器，包含 Hierarchy、Inspector、Scene View、Game View、Project、Console、UI 编辑器、Build Settings 等面板。
-- Python 组件生命周期、协程工具、预制体工作流、序列化字段和热重载。
-- 游戏 UI 基础能力，包括 Canvas、Text、Image、Button 和事件系统。
-- Hub 的独立打包与 Windows 安装器流程。
+What is still in progress:
 
-接下来的重点是动画系统、高级 UI 控件、更完整的上手资料，以及更强的内容生产链路。
+- broader C# gameplay API coverage
+- more docs and onboarding material
+- animation and deeper content-pipeline work
 
-## 架构分层
+## Architecture
 
-Infernux 的分层不是为了概念好看，而是按职责划分。
+| Layer | Responsibility |
+|:------|:---------------|
+| C++17 / Vulkan | Renderer, scene systems, physics, resources, platform integration |
+| pybind11 bridge | Native bindings for the Python/editor layer |
+| Python | Editor UI, tooling, workflows, packaging, asset automation |
+| Native CLR host | Loads and drives managed gameplay assemblies on Windows |
+| C# | Runtime gameplay components and managed engine-facing APIs |
 
-| 层 | 职责 |
-|:---|:-----|
-| C++17 / Vulkan | 渲染器、资源所有权、物理、场景系统、平台服务 |
-| pybind11 绑定层 | 把原生系统暴露给 Python |
-| Python | 玩法、编辑器逻辑、工具开发、自动化、渲染编排 |
+Important boundary:
 
-这样做的目的是让性能关键路径维持在原生侧，而日常频繁改动的生产代码放在更适合快速迭代和接入外部生态的语言中。
+- Python is still the production/editor layer.
+- C# is currently the managed gameplay runtime layer.
+- Managed runtime hosting is Windows-only right now.
 
-## 快速开始
+## C# Gameplay Support
 
-### 环境要求
+The engine now generates a managed gameplay project at:
 
-| 依赖 | 版本 |
-|:-----|:-----|
-| Windows | 10 / 11（64 位） |
-| Python | 3.12+ |
-| Vulkan SDK | 1.3+ |
+- `Scripts/Infernux.GameScripts.csproj`
+
+and runtime stubs at:
+
+- `Scripts/Generated/Infernux.RuntimeStubs.cs`
+
+User gameplay scripts are compiled from:
+
+- `Assets/**/*.cs`
+
+The generated project targets `net8.0`, and the native runtime loads the resulting assembly through `hostfxr`.
+
+### C# API currently bridged
+
+User gameplay scripts currently inherit from `InxComponent`.
+
+`InxComponent`
+
+- context properties: `gameObject`, `transform`, `Enabled`, `ExecutionOrder`, `ScriptGuid`
+- lifecycle methods: `Awake`, `OnEnable`, `Start`, `Update(float deltaTime)`, `FixedUpdate(float fixedDeltaTime)`, `LateUpdate(float deltaTime)`, `OnDisable`, `OnDestroy`, `OnValidate`, `Reset`
+
+`GameObject`
+
+- `Find(string)`
+- `Create(string? name = null)`
+- `CreatePrimitive(PrimitiveType, string? name = null)`
+- `Instantiate(GameObject, Transform? parent = null)`
+- `Destroy(GameObject?)`
+- `Destroy()`
+- `name`
+- `tag`
+- `layer`
+- `activeSelf`
+- `activeInHierarchy`
+- `SetActive(bool)`
+- `CompareTag(string)`
+
+`Transform`
+
+- `position`
+- `localPosition`
+- `localScale`
+- `parent`
+- `childCount`
+- `Translate(Vector3)`
+- `SetParent(Transform? parent, bool worldPositionStays = true)`
+- `GetChild(int)`
+- `Find(string)`
+
+`Debug`
+
+- `Log`
+- `LogWarning`
+- `LogError`
+
+### Example
+
+```csharp
+using Infernux;
+
+public sealed class NewComponent : InxComponent
+{
+    public override void Start()
+    {
+        var cube = GameObject.CreatePrimitive(PrimitiveType.Cube, "RuntimeCube");
+        if (cube != null)
+        {
+            cube.transform.position = new Vector3(0, 1, 0);
+            cube.transform.localScale = new Vector3(2, 2, 2);
+
+            var clone = GameObject.Instantiate(cube);
+            if (clone != null)
+            {
+                clone.transform.position = new Vector3(2, 1, 0);
+            }
+
+            Debug.Log($"Created {cube.name}");
+        }
+    }
+}
+```
+
+## Requirements
+
+| Dependency | Version |
+|:-----------|:--------|
+| Windows | 10 / 11 (64-bit) |
+| Visual Studio | 2022 with MSVC v143 |
 | CMake | 3.22+ |
-| Visual Studio | 2022（MSVC v143） |
-| pybind11 | 2.11+ |
+| Python | 3.12+ x64 |
+| Vulkan SDK | 1.3+ |
+| .NET | .NET 8 SDK or runtime |
+| Git | Latest Git for Windows |
 
-你可以使用任意 Python 3.12 环境。下面的示例使用 Conda，因为这是这个仓库里最常见的开发方式。
+Notes:
 
-### 克隆仓库
+- The native CLR host searches for `hostfxr.dll` from installed .NET locations.
+- The Windows build helper defaults to `PythonSpec 3.12`, but `3.13` also works if installed and selected explicitly.
 
-```bash
+## Quick Start
+
+### Clone
+
+```powershell
 git clone --recurse-submodules https://github.com/ChenlizheMe/Infernux.git
 cd Infernux
 ```
 
-如果你之前没有带上子模块：
+If you already cloned without submodules:
 
-```bash
+```powershell
 git submodule update --init --recursive
 ```
 
-### 构建引擎
+### Recommended Windows build
 
-```bash
-conda create -n infengine python=3.12 -y
-conda activate infengine
+Use the repository helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dev\build_engine_windows.ps1 -PythonSpec 3.12
+```
+
+Useful options:
+
+- `-Preset debug`
+- `-SkipManagedBuild`
+- `-RunLauncher`
+
+What this script does:
+
+- validates Python, CMake, Vulkan SDK, and Git
+- initializes submodules
+- installs Python requirements into `.venv`
+- configures and builds the native engine
+- packages and installs the Python module into the local environment
+- optionally builds a managed gameplay project if one exists in the repo root
+
+### Launch the editor in development mode
+
+```powershell
+.\.venv\Scripts\python.exe .\packaging\launcher.py
+```
+
+## Managed Project Workflow
+
+For an actual game project, the engine generates:
+
+- `Scripts/Infernux.GameScripts.csproj`
+- `Scripts/Generated/Infernux.RuntimeStubs.cs`
+
+Build the managed gameplay assembly with:
+
+```powershell
+dotnet build 'E:\Path\To\YourProject\Scripts\Infernux.GameScripts.csproj' -c Debug
+```
+
+If the build fails because `Infernux.GameScripts.dll` is locked, close the running editor or build to a temporary output directory:
+
+```powershell
+dotnet build 'E:\Path\To\YourProject\Scripts\Infernux.GameScripts.csproj' -c Debug -p:OutDir=E:\Path\To\YourProject\Scripts\bin\DebugVerify\
+```
+
+The native host looks for:
+
+- `Data/Managed/Infernux.GameScripts.dll`
+- `Scripts/bin/Debug/net8.0/Infernux.GameScripts.dll`
+- `Scripts/bin/Release/net8.0/Infernux.GameScripts.dll`
+
+with the matching `.runtimeconfig.json`.
+
+## Manual Native Build
+
+If you prefer not to use the PowerShell helper:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cmake --preset release
+cmake --preset release -DPython3_EXECUTABLE="%CD%\\.venv\\Scripts\\python.exe"
 cmake --build --preset release
 ```
 
-这个流程会编译原生模块、复制运行时依赖，并把 Python 包安装到当前环境里，使你可以直接在工作区中 `import Infernux`。
+The helper script is still the recommended path on Windows because it handles tool detection and packaging details for you.
 
-### 以开发模式启动 Hub
+## Tests
 
-```bash
-conda activate infengine
-python packaging/launcher.py
-```
+Python tests:
 
-开发模式会使用当前 Python 环境和本地构建产物，不会安装 Hub 的私有运行时。
-
-### 运行测试
-
-```bash
-conda activate infengine
+```powershell
 cd python
-python -m pytest test/ -v
+python -m pytest test -v
 ```
 
-## 文档
+Managed gameplay smoke tests are currently best validated by:
 
-- 官网：<https://chenlizheme.github.io/Infernux/>
-- 文档入口：<https://chenlizheme.github.io/Infernux/wiki.html>
-- API 参考：从 Python 包自动生成，并以静态 HTML 发布到 `docs/wiki/site/`
+- building the generated `Infernux.GameScripts.csproj`
+- launching the editor
+- entering Play Mode with a C# component attached
 
-本地重新生成 API Markdown 和 HTML 文档：
+## Packaging
 
-```bash
-conda activate infengine
+Portable Hub bundle:
+
+```powershell
+cmake --build --preset packaging
+```
+
+Windows installer:
+
+```powershell
+cmake --build --preset packaging-installer
+```
+
+## Documentation
+
+- Website: [https://chenlizheme.github.io/Infernux/](https://chenlizheme.github.io/Infernux/)
+- Docs hub: [https://chenlizheme.github.io/Infernux/wiki.html](https://chenlizheme.github.io/Infernux/wiki.html)
+
+Regenerate docs locally:
+
+```powershell
 python docs/wiki/generate_api_docs.py
 python -m mkdocs build --clean -f docs/wiki/mkdocs.yml
 ```
 
-对应的 CMake 目标是 `generate_api_docs` 和 `build_wiki_html`。
+## Contributing
 
-## 打包与分发
+Useful issues and PRs right now are the ones that improve:
 
-Hub 目前有两条正式支持的分发路径。
+- C# gameplay bridge coverage
+- editor stability and workflow polish
+- docs and onboarding
+- content pipeline robustness
 
-### 独立目录打包
+Before sending broad architectural changes, open an issue or discussion first.
 
-```bash
-cmake --build --preset packaging
-```
-
-这会生成位于 `dist/Infernux Hub/` 的 PyInstaller 目录，适合本地验证或开发者分发。
-
-### Windows 安装器
-
-```bash
-cmake --build --preset packaging-installer
-```
-
-这会生成 Hub 的图形化 Windows 安装器。安装流程会根据主机架构准备对应的 Python 3.12 运行时，再由 Hub 基于这套私有运行时为项目创建运行环境。
-
-## 参与贡献
-
-现在这个阶段，Bug 报告、功能建议和工作流反馈都很有价值。提交 issue 时，尽量说明引擎版本、环境信息、复现步骤，以及问题属于原生运行时、Python 层还是打包链路。
-
-贡献和支持相关说明位于这些社区文件中：
+Related community files:
 
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 - `SUPPORT.md`
 
-## 许可证
+## License
 
-Infernux 基于 MIT License 发布，详见 `LICENSE`。
-
-这意味着每个项目拥有自己独立完整的 Python 副本，不与其他项目共享运行时。
-
----
-
-## 架构
-
-```text
-Python 创作层
-  -> 编辑器面板、组件系统、RenderGraph 编排、工具工作流
-  -> pybind11 绑定接缝
-C++ 引擎核心
-  -> 渲染器、场景、资源、物理、音频、平台服务
-外部技术栈
-  -> Vulkan、SDL3、Jolt、ImGui、Assimp、GLM、glslang、VMA
-```
-
-### 实际工作流
-
-1. 用 Python 编写玩法或渲染逻辑。
-2. 绑定到编辑器可见的数据和场景对象。
-3. 通过 RenderGraph API 描述渲染 Pass。
-4. 原生后端负责调度、内存管理和 GPU 执行。
-
----
-
-## 当前状态
-
-### 已完成
-
-- Vulkan 渲染（前向 + 延迟）、PBR、阴影、8 种后处理效果
-- Python 脚本与热重载、编辑器集成
-- 完整编辑器（12 个面板、Gizmo、撤销重做、Play 模式）
-- Jolt 物理（刚体、碰撞体、射线检测、碰撞层）
-- SDL3 音频（3D 空间化）
-- 资产管线（基于 GUID 的 AssetDatabase、.meta 文件、依赖图）
-- 预制体系统（保存/实例化/覆盖追踪）
-- 游戏 UI 系统（Canvas、Text、Image、Button、事件系统）
-- 基于 Nuitka 的独立游戏构建
-- Hub 启动器与 Windows 安装器
-
-### 进行中
-
-- 动画系统（骨骼动画、状态机）
-- 高级 UI 控件（ScrollView、Slider、布局组件）
-- 文档、教程与示例项目
-
----
-
-## 路线图
-
-| 版本 | 重点 |
-|:-----|:-----|
-| v0.1 | **当前** — 渲染、物理、音频、脚本、编辑器、预制体、游戏 UI、独立构建均已可用，支持开发不含动画的基础游戏 |
-| v0.2 | 动画系统、高级 UI 控件（ScrollView、Slider、布局）、资产重命名改进 |
-| v0.3 | 粒子系统、地形、模型/内容管线改进 |
-| v0.4 | 网络基础 |
-| v1.0 | 文档、示例、生产就绪 |
-
----
-
-## 仓库结构
-
-```text
-cpp/infernux/        原生引擎运行时
-python/Infernux/     Python 引擎层与编辑器系统
-packaging/            启动器与项目管理工具
-docs/                 网站与生成文档入口
-external/             第三方依赖与子模块
-dev/                  发布用脚本
-```
-
----
-
-## 参与贡献
-
-1. 先读 README 和文档站。
-2. 查看路线图了解当前优先级。
-3. 大改动前请先开 Issue 或 Discussion。
-4. 提交目标明确的 Pull Request。
-
----
-
-## 致谢
-
-- 架构方向受到王希 [GAMES104](https://games104.boomingtech.com/) 课程启发
-- 使用了 [Jolt Physics](https://github.com/jrouwe/JoltPhysics)、[SDL3](https://github.com/libsdl-org/SDL)、[Dear ImGui](https://github.com/ocornut/imgui)、[Assimp](https://github.com/assimp/assimp)、[GLM](https://github.com/g-truc/glm)、[glslang](https://github.com/KhronosGroup/glslang) 与 [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator)
-
----
-
-## 联系方式
-
-- 作者：Lizhe Chen
-- 邮箱：[chenlizheme@outlook.com](mailto:chenlizheme@outlook.com)
-- GitHub：[https://github.com/ChenlizheMe/Infernux](https://github.com/ChenlizheMe/Infernux)
-
-## 许可证
-
-MIT 协议。详见 [LICENSE](LICENSE)。
+Infernux is released under the MIT License. See [LICENSE](LICENSE) for details.
