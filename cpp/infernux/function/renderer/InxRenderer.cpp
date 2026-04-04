@@ -391,20 +391,59 @@ void InxRenderer::DrawFrame()
     FrameProfiler _fp;
     static int _fpCounter = 0;
     static double _fpAccum[12] = {};
+    static double _deltaAccumMs = 0.0;
     static double _srpSceneViewMs = 0;
     static double _srpGameViewMs = 0;
     static SceneManager::FrameProfile _sceneAccum;
     static std::unordered_map<std::string, double> _guiAccum;
+    static std::unordered_map<std::string, double> _inspSubAccum;
+    struct FramePacingAccum
+    {
+        double targetFps = 0.0;
+        double elapsedBeforeSleepMs = 0.0;
+        double frameBudgetMs = 0.0;
+        double requestedSleepMs = 0.0;
+        double actualSleepMs = 0.0;
+        int sleptFrames = 0;
+        int idleFrames = 0;
+        int wokeByEventFrames = 0;
+        int wokeByInputFrames = 0;
+        int wokeByWindowFrames = 0;
+        int wokeByOtherFrames = 0;
+        int inputFrames = 0;
+        int playBypassFrames = 0;
+    };
+    static FramePacingAccum _pacingAccum;
     _fp.stamp(); // [0] frame start
 #endif
 
     // Invalidate per-frame game camera cache
     m_gameCameraCacheValid = false;
+    // NOTE: do NOT reset m_lastGameRenderMs here — Python panels read it
+    // during BuildFrame() which runs BEFORE the game camera render pass.
+    // The value from the previous frame is the correct one for display.
 
     // Window events
     m_view->ProcessEvent();
 #if INFERNUX_FRAME_PROFILE
     _fp.stamp(); // [1] after input/event processing
+    _deltaAccumMs += static_cast<double>(m_deltaTime) * 1000.0;
+    if (m_view) {
+        const auto &pacing = m_view->GetLastPacingSample();
+        _pacingAccum.targetFps += pacing.targetFps;
+        _pacingAccum.elapsedBeforeSleepMs += pacing.elapsedBeforeSleepMs;
+        _pacingAccum.frameBudgetMs += pacing.frameBudgetMs;
+        _pacingAccum.requestedSleepMs += pacing.requestedSleepMs;
+        _pacingAccum.actualSleepMs += pacing.actualSleepMs;
+        _pacingAccum.sleptFrames += pacing.slept ? 1 : 0;
+        _pacingAccum.idleFrames += pacing.idleMode ? 1 : 0;
+        _pacingAccum.wokeByEventFrames += pacing.wokeByEvent ? 1 : 0;
+        _pacingAccum.wokeByInputFrames += pacing.wokeByInputEvent ? 1 : 0;
+        _pacingAccum.wokeByWindowFrames += pacing.wokeByWindowEvent ? 1 : 0;
+        _pacingAccum.wokeByOtherFrames += pacing.wokeByOtherEvent ? 1 : 0;
+        _pacingAccum.inputFrames += pacing.hadInputEvent ? 1 : 0;
+        _pacingAccum.playBypassFrames += pacing.playModeBypass ? 1 : 0;
+    }
 #endif
 
     // Skip rendering while the window is minimized.
@@ -416,6 +455,7 @@ void InxRenderer::DrawFrame()
     }
 
     // Update scene system
+    auto _sceneUpdateStart = std::chrono::high_resolution_clock::now();
     SceneManager::Instance().Update(m_deltaTime);
 
     // LateUpdate runs immediately after Update — before rendering — so that
@@ -423,6 +463,8 @@ void InxRenderer::DrawFrame()
     // results are picked up by the same frame's render pass.  This matches
     // Unity's execution order: FixedUpdate → Update → LateUpdate → Render.
     SceneManager::Instance().LateUpdate(m_deltaTime);
+    auto _sceneUpdateEnd = std::chrono::high_resolution_clock::now();
+    m_sceneUpdateMs = std::chrono::duration<double, std::milli>(_sceneUpdateEnd - _sceneUpdateStart).count();
 #if INFERNUX_FRAME_PROFILE
     _fp.stamp(); // [2] after SceneManager::Update + LateUpdate
 #endif
@@ -457,7 +499,10 @@ void InxRenderer::DrawFrame()
         m_preGuiCallback();
     }
 
+    auto _guiBuildStart = std::chrono::high_resolution_clock::now();
     m_gui->BuildFrame();
+    auto _guiBuildEnd = std::chrono::high_resolution_clock::now();
+    m_guiBuildMs = std::chrono::duration<double, std::milli>(_guiBuildEnd - _guiBuildStart).count();
 #if INFERNUX_FRAME_PROFILE
     _fp.stamp(); // [4] after GUI::BuildFrame (ImGui → Python panels)
 #endif
@@ -465,7 +510,10 @@ void InxRenderer::DrawFrame()
     // Prepare scene rendering data (collect + cull + sort) AFTER GUI processing
     // so we always operate on the current scene state.
     SceneRenderBridge &bridge = SceneRenderBridge::Instance();
+    auto _prepareStart = std::chrono::high_resolution_clock::now();
     bridge.PrepareFrame();
+    auto _prepareEnd = std::chrono::high_resolution_clock::now();
+    m_prepareFrameMs = std::chrono::duration<double, std::milli>(_prepareEnd - _prepareStart).count();
 #if INFERNUX_FRAME_PROFILE
     _fp.stamp(); // [5] after PrepareFrame (CollectRenderables)
 #endif
@@ -567,19 +615,36 @@ void InxRenderer::DrawFrame()
                 std::vector<Camera *> gameCameras;
                 gameCameras.push_back(gameCam);
 
-#if INFERNUX_FRAME_PROFILE
                 auto _srpT2 = std::chrono::high_resolution_clock::now();
-#endif
                 m_renderPipeline->Render(gameCtx, gameCameras);
-#if INFERNUX_FRAME_PROFILE
                 auto _srpT3 = std::chrono::high_resolution_clock::now();
-                _srpGameViewMs += std::chrono::duration<double, std::milli>(_srpT3 - _srpT2).count();
+                m_lastGameRenderMs = std::chrono::duration<double, std::milli>(_srpT3 - _srpT2).count();
+#if INFERNUX_FRAME_PROFILE
+                _srpGameViewMs += m_lastGameRenderMs;
 #endif
             }
         }
     } else {
         INXLOG_ERROR("No render pipeline set — scene will not be rendered. "
                      "Call engine.set_render_pipeline(DefaultRenderPipelineAsset()) to activate rendering.");
+    }
+
+    // RenderPipeline::Render() applies the current Python graph. Re-check the
+    // requested MSAA here so a newly selected pipeline can switch sample count
+    // before any stale render graph executes this frame.
+    if (m_sceneRenderGraph) {
+        int requested = m_sceneRenderGraph->GetRequestedMsaaSamples();
+        if (requested > 0 && requested != GetMsaaSamples()) {
+            SetMsaaSamples(requested);
+            return;
+        }
+    }
+    if (m_gameRenderGraph) {
+        int requested = m_gameRenderGraph->GetRequestedMsaaSamples();
+        if (requested > 0 && requested != GetMsaaSamples()) {
+            SetMsaaSamples(requested);
+            return;
+        }
     }
 #if INFERNUX_FRAME_PROFILE
     _fp.stamp(); // [6] after RenderPipeline::Render (Python SRP)
@@ -680,6 +745,9 @@ void InxRenderer::DrawFrame()
 
     SceneManager::Instance().EndFrame();
 
+    // Compute game-only frame cost: sum of game phases, excluding editor UI.
+    m_gameOnlyFrameMs = m_sceneUpdateMs + m_prepareFrameMs + m_lastGameRenderMs;
+
     // ========================================================================
     // Post-draw callback: scene loading / deferred tasks that must run
     // AFTER GPU submission.  The Python callback pumps OS events itself
@@ -734,12 +802,20 @@ void InxRenderer::DrawFrame()
             }
         }
 
+        // Accumulate inspector sub-timings
+        {
+            auto sub = m_gui->ConsumePanelSubTimings("inspector");
+            for (const auto &kv : sub)
+                _inspSubAccum[kv.first] += kv.second;
+        }
+
         ++_fpCounter;
         if (_fpCounter % 120 == 0) {
             constexpr double kWindow = 120.0;
             std::ostringstream oss;
             oss << std::fixed << std::setprecision(2);
             oss << "[Profile] avg120 frame=" << (_fpAccum[0] / kWindow) << "ms"
+                << " | Delta=" << (_deltaAccumMs / kWindow) << "ms"
                 << " | Input=" << (_fpAccum[1] / kWindow) << "ms"
                 << " | Scene+Late=" << (_fpAccum[2] / kWindow) << "ms"
                 << " | GPUFence=" << (_fpAccum[3] / kWindow) << "ms"
@@ -838,6 +914,17 @@ void InxRenderer::DrawFrame()
                 }
             }
 
+            oss << "\n  Pacing: target=" << (_pacingAccum.targetFps / kWindow)
+                << "fps budget=" << (_pacingAccum.frameBudgetMs / kWindow)
+                << "ms elapsed=" << (_pacingAccum.elapsedBeforeSleepMs / kWindow)
+                << "ms reqSleep=" << (_pacingAccum.requestedSleepMs / kWindow)
+                << "ms actualSleep=" << (_pacingAccum.actualSleepMs / kWindow)
+                << "ms slept=" << _pacingAccum.sleptFrames << '/' << static_cast<int>(kWindow)
+                << " idle=" << _pacingAccum.idleFrames << '/' << static_cast<int>(kWindow)
+                << " wakeByEvent=" << _pacingAccum.wokeByEventFrames << " wakeInput=" << _pacingAccum.wokeByInputFrames
+                << " wakeWindow=" << _pacingAccum.wokeByWindowFrames << " wakeOther=" << _pacingAccum.wokeByOtherFrames
+                << " input=" << _pacingAccum.inputFrames << " playBypass=" << _pacingAccum.playBypassFrames;
+
             oss << "\n  Scene: editorCam=" << (_sceneAccum.editorCameraMs / kWindow)
                 << "ms editor=" << (_sceneAccum.editorUpdateMs / kWindow)
                 << "ms pending=" << (_sceneAccum.pendingStartsMs / kWindow)
@@ -865,6 +952,24 @@ void InxRenderer::DrawFrame()
                 oss << ' ' << name << '=' << avgMs << "ms";
             }
             oss << " total=" << guiTotal << "ms";
+
+            // Inspector sub-timing breakdown
+            if (!_inspSubAccum.empty()) {
+                std::vector<std::pair<std::string, double>> inspItems(_inspSubAccum.begin(), _inspSubAccum.end());
+                std::sort(inspItems.begin(), inspItems.end(),
+                          [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+                auto isCountMetric = [](const std::string &key) {
+                    constexpr char kSuffix[] = "_count";
+                    return key.size() >= (sizeof(kSuffix) - 1) &&
+                           key.compare(key.size() - (sizeof(kSuffix) - 1), sizeof(kSuffix) - 1, kSuffix) == 0;
+                };
+                oss << "\n    Inspector:";
+                for (const auto &kv : inspItems) {
+                    oss << ' ' << kv.first << '=' << (kv.second / kWindow);
+                    if (!isCountMetric(kv.first))
+                        oss << "ms";
+                }
+            }
             INXLOG_WARN(oss.str());
 #if INFERNUX_FRAME_PROFILE_TERMINAL
             std::cerr << oss.str() << std::endl;
@@ -873,10 +978,13 @@ void InxRenderer::DrawFrame()
             for (double &value : _fpAccum) {
                 value = 0.0;
             }
+            _deltaAccumMs = 0.0;
             _srpSceneViewMs = 0;
             _srpGameViewMs = 0;
             _sceneAccum = {};
             _guiAccum.clear();
+            _inspSubAccum.clear();
+            _pacingAccum = {};
             if (m_vkCore) {
                 m_vkCore->ResetDrawSubTimings();
             }
@@ -1493,7 +1601,7 @@ void InxRenderer::ResizeGameRenderTarget(uint32_t width, uint32_t height)
 
     // Lazy-initialize game render target on first resize request
     if (!m_gameRenderTarget) {
-        INXLOG_INFO("Game render target: lazy-initializing (", width, "x", height, ")");
+        // INXLOG_INFO("Game render target: lazy-initializing (", width, "x", height, ")");
         m_gameRenderTarget = std::make_unique<SceneRenderTarget>(m_vkCore.get());
         // Match the current MSAA setting from the scene render target.
         // Without this, the game render target defaults to 4x MSAA even
@@ -1579,8 +1687,6 @@ void InxRenderer::SetMsaaSamples(int samples)
         return; // No change
     }
 
-    INXLOG_INFO("SetMsaaSamples: changing to ", samples, "x");
-
     // Must drain GPU before destroying Vulkan resources
     if (m_vkCore) {
         m_vkCore->GetDeviceContext().WaitIdle();
@@ -1638,8 +1744,6 @@ void InxRenderer::SetMsaaSamples(int samples)
     if (m_outlineRenderer) {
         m_outlineRenderer->Cleanup();
     }
-
-    INXLOG_INFO("SetMsaaSamples: complete (", samples, "x)");
 }
 
 int InxRenderer::GetMsaaSamples() const
@@ -1661,6 +1765,65 @@ int InxRenderer::GetPresentMode() const
     if (m_vkCore)
         return m_vkCore->GetPresentMode();
     return 1; // MAILBOX default
+}
+
+// ========================================================================
+// Editor Power-Save / Idle Mode
+// ========================================================================
+
+void InxRenderer::SetEditorIdleEnabled(bool enabled)
+{
+    if (m_view)
+        m_view->GetIdling().enableIdling = enabled;
+}
+
+bool InxRenderer::IsEditorIdleEnabled() const
+{
+    return m_view ? m_view->GetIdling().enableIdling : false;
+}
+
+void InxRenderer::SetEditorIdleFps(float fps)
+{
+    if (m_view)
+        m_view->GetIdling().fpsIdle = fps;
+}
+
+float InxRenderer::GetEditorIdleFps() const
+{
+    return m_view ? m_view->GetIdling().fpsIdle : 0.0f;
+}
+
+bool InxRenderer::IsEditorIdling() const
+{
+    return m_view ? m_view->GetIdling().isIdling : false;
+}
+
+void InxRenderer::SetEditorFpsCap(float fps)
+{
+    if (m_view)
+        m_view->GetIdling().editorFpsCap = fps;
+}
+
+float InxRenderer::GetEditorFpsCap() const
+{
+    return m_view ? m_view->GetIdling().editorFpsCap : 0.0f;
+}
+
+void InxRenderer::SetPlayModeRendering(bool play)
+{
+    if (m_view)
+        m_view->SetPlayMode(play);
+}
+
+bool InxRenderer::IsPlayModeRendering() const
+{
+    return m_view ? m_view->IsPlayMode() : false;
+}
+
+void InxRenderer::RequestFullSpeedFrame()
+{
+    if (m_view)
+        m_view->RequestFullSpeedFrame();
 }
 
 } // namespace infernux

@@ -87,6 +87,11 @@ class GameViewPanel(EditorPanel):
         self._fps_accum_frames = 0
         self._display_fps = 0.0
         self._display_frame_ms = 0.0
+        # Game-only FPS (excludes editor panel overhead)
+        self._game_fps_accum_time = 0.0
+        self._game_fps_accum_frames = 0
+        self._display_game_fps = 0.0
+        self._display_game_frame_ms = 0.0
 
     def _set_game_render_active(self, active: bool) -> None:
         """Keep C++ game rendering in lockstep with actual panel visibility.
@@ -239,6 +244,12 @@ class GameViewPanel(EditorPanel):
         self._was_focused = False
         Input.set_game_focused(False)
         self._ui_event_processor.reset()
+        # Disable game rendering when the panel is invisible (e.g. another
+        # tab like UI Editor covers this dock).  Without this, C++ keeps
+        # submitting draw commands against a stale game render target, which
+        # can trigger VK_ERROR_DEVICE_LOST.  Rendering is re-enabled in
+        # on_render_content() once the panel becomes visible again.
+        self._set_game_render_active(False)
 
     def _on_visible_pre(self, ctx):
         focused = (ClosablePanel.get_active_panel_id() == self.window_id) or ctx.is_window_focused(0)
@@ -315,16 +326,28 @@ class GameViewPanel(EditorPanel):
         if pushed_fit_style:
             ctx.pop_style_color(1)
 
-        # ── FPS counter (right-aligned) ──
+        # ── FPS counter (right-aligned, Unity-style) ──
+        # Total FPS = real wall-clock frame rate (all work including editor panels).
+        # Game FPS  = estimated FPS from game-only phases (scripts + physics +
+        #             rendering), excluding editor panel overhead.
         dt = Time.unscaled_delta_time
+        game_dt = Time.game_delta_time
         if dt > 0.0:
             self._fps_accum_time += dt
             self._fps_accum_frames += 1
+            if game_dt > 0.0:
+                self._game_fps_accum_time += game_dt
+                self._game_fps_accum_frames += 1
             if self._fps_accum_time >= 1.0:
                 self._display_fps = self._fps_accum_frames / self._fps_accum_time
                 self._display_frame_ms = (self._fps_accum_time / self._fps_accum_frames) * 1000.0
                 self._fps_accum_time = 0.0
                 self._fps_accum_frames = 0
+                if self._game_fps_accum_frames > 0 and self._game_fps_accum_time > 0.0:
+                    self._display_game_frame_ms = (self._game_fps_accum_time / self._game_fps_accum_frames) * 1000.0
+                    self._display_game_fps = 1000.0 / self._display_game_frame_ms
+                self._game_fps_accum_time = 0.0
+                self._game_fps_accum_frames = 0
 
         fps_text = f"FPS: {self._display_fps:.0f} ({self._display_frame_ms:.1f} ms)"
         if fps_text != getattr(self, '_cached_fps_text', None):

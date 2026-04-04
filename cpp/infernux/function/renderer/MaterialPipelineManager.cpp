@@ -40,8 +40,6 @@ void MaterialPipelineManager::Initialize(VmaAllocator allocator, VkDevice device
         INXLOG_WARN("Failed to create VkPipelineCache, pipeline recreation may be slower");
         m_vkPipelineCache = VK_NULL_HANDLE;
     }
-
-    INXLOG_INFO("MaterialPipelineManager initialized with shader reflection support");
 }
 
 void MaterialPipelineManager::Shutdown(bool skipWaitIdle)
@@ -121,8 +119,6 @@ void MaterialPipelineManager::Shutdown(bool skipWaitIdle)
     m_defaultRenderData = nullptr;
     m_device = VK_NULL_HANDLE;
     m_physicalDevice = VK_NULL_HANDLE;
-
-    INXLOG_INFO("MaterialPipelineManager shutdown");
 }
 
 VkShaderModule MaterialPipelineManager::CreateShaderModule(const std::vector<char> &code)
@@ -296,7 +292,23 @@ MaterialRenderData *MaterialPipelineManager::GetOrCreateRenderDataWithReflection
 
         renderData->isValid = true;
 
-        // Cache the pipeline
+        // Cache the pipeline — guard against hash collisions that would
+        // silently overwrite (and leak) a different VkPipeline handle.
+        auto cacheIt = m_pipelineCache.find(pipelineKey);
+        if (cacheIt != m_pipelineCache.end() && cacheIt->second != renderData->pipeline) {
+            // Collision: the slot already holds a different pipeline.
+            // Check if any render data entry still references the old handle.
+            bool oldStillUsed = false;
+            for (const auto &[rdName, rdData] : m_renderDataMap) {
+                if (rdData && rdData->pipeline == cacheIt->second) {
+                    oldStillUsed = true;
+                    break;
+                }
+            }
+            if (!oldStillUsed) {
+                vkDestroyPipeline(m_device, cacheIt->second, nullptr);
+            }
+        }
         m_pipelineCache[pipelineKey] = renderData->pipeline;
     }
 
@@ -402,18 +414,12 @@ VkPipeline MaterialPipelineManager::CreatePipelineWithProgram(ShaderProgram *pro
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = m_sampleCount;
 
-    // Color blending — create one blend attachment per color output for MRT
+    // Color blending — create one blend attachment per color output for MRT.
+    // Opaque forward passes also need alpha writes so intermediate scene
+    // layers can preserve coverage for later fullscreen composites.
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    if (!renderState.blendEnable && m_activeColorAttachmentCount == 1) {
-        // Forward opaque: exclude alpha write so the framebuffer retains alpha=1.0
-        // from the clear color.  The scene texture is displayed via ImGui which
-        // alpha-blends; writing alpha<1 would make opaque pixels appear transparent.
-        colorBlendAttachment.colorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
-    } else {
-        colorBlendAttachment.colorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    }
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     colorBlendAttachment.blendEnable = renderState.blendEnable ? VK_TRUE : VK_FALSE;
     colorBlendAttachment.srcColorBlendFactor = renderState.srcColorBlendFactor;
     colorBlendAttachment.dstColorBlendFactor = renderState.dstColorBlendFactor;

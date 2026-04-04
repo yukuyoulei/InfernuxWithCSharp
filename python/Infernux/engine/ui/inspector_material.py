@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import json
 import os
+import time as _time
 from types import SimpleNamespace
 from typing import Optional
 
 from Infernux.lib import InxGUIContext
 from Infernux.engine.i18n import t
+from . import inspector_support as _inspector_support
 from .asset_execution_layer import AssetAccessMode, get_asset_execution_layer
 from .inspector_utils import (
     max_label_w,
@@ -27,6 +29,12 @@ from .inspector_utils import (
 )
 from .theme import Theme, ImGuiCol, ImGuiStyleVar
 from . import inspector_shader_utils as shader_utils
+
+
+def _record_profile_timing(bucket: str, start_time: float) -> None:
+    _inspector_support.record_inspector_profile_timing(
+        bucket, (_time.perf_counter() - start_time) * 1000.0,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -259,6 +267,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
     changed = False
     requires_deserialize = False
     requires_pipeline_refresh = False
+    change_key = ""
 
     # Sync shader annotations (both vertex + fragment properties)
     vert_shader_id = mat_data.get("shaders", {}).get("vertex", "")
@@ -303,6 +312,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
     # ── Shader Section ─────────────────────────────────────────────────
     if is_builtin:
         ctx.begin_disabled(True)
+    section_t0 = _time.perf_counter()
     if render_compact_section_header(ctx, t("material.shader_section"), level="secondary",
                                      default_open=default_open_sections):
         shaders = mat_data.setdefault("shaders", {})
@@ -317,9 +327,10 @@ def render_material_body(ctx: InxGUIContext, panel, state):
         vert_display = shader_utils.shader_display_from_value(vert_path, vert_items)
 
         def _on_vert_pick(picked):
-            nonlocal changed, requires_deserialize, requires_pipeline_refresh
+            nonlocal changed, requires_deserialize, requires_pipeline_refresh, change_key
             shaders["vertex"] = picked
             changed = True
+            change_key = "shader.vertex"
             requires_deserialize = True
             requires_pipeline_refresh = True
             frag_id = shaders.get("fragment", "")
@@ -336,6 +347,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                 if ctx.selectable(display, value == vert_path):
                     shaders["vertex"] = value
                     changed = True
+                    change_key = "shader.vertex"
                     requires_deserialize = True
                     requires_pipeline_refresh = True
                     frag_id = shaders.get("fragment", "")
@@ -349,10 +361,11 @@ def render_material_body(ctx: InxGUIContext, panel, state):
         frag_display = shader_utils.shader_display_from_value(frag_path, frag_items)
 
         def _on_frag_pick(picked):
-            nonlocal changed, requires_deserialize, requires_pipeline_refresh
+            nonlocal changed, requires_deserialize, requires_pipeline_refresh, change_key
             old_frag = shaders.get("fragment", "")
             shaders["fragment"] = picked
             changed = True
+            change_key = "shader.fragment"
             requires_deserialize = True
             requires_pipeline_refresh = True
             if picked != old_frag:
@@ -371,6 +384,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                     old_frag = shaders.get("fragment", "")
                     shaders["fragment"] = value
                     changed = True
+                    change_key = "shader.fragment"
                     requires_deserialize = True
                     requires_pipeline_refresh = True
                     if value != old_frag:
@@ -378,6 +392,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                         shader_utils.sync_all_shader_properties(mat_data, vert_id, value, remove_unknown=True)
                         state.extra["shader_sync_key"] = f"{vert_id}|{value}:{shader_utils.get_shader_property_generation()}"
             ctx.end_popup()
+    _record_profile_timing("materialShader", section_t0)
     if is_builtin:
         ctx.end_disabled()
 
@@ -386,6 +401,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
     # ── Surface Options (Render Settings) ──────────────────────────────
     if is_builtin:
         ctx.begin_disabled(True)
+    section_t0 = _time.perf_counter()
     if render_compact_section_header(ctx, t("material.surface_options"), level="secondary",
                                      default_open=default_open_sections):
         rs = mat_data.setdefault("renderState", {})
@@ -427,6 +443,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                 overrides |= 0x40   # RenderQueue
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.surface_type"
             requires_deserialize = True
             requires_pipeline_refresh = True
 
@@ -442,6 +459,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
             overrides |= 0x01  # CullMode
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.cull_mode"
             requires_deserialize = True
             requires_pipeline_refresh = True
 
@@ -454,6 +472,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
             overrides |= 0x02  # DepthWrite
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.depth_write"
             requires_deserialize = True
             requires_pipeline_refresh = True
 
@@ -476,6 +495,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
             overrides |= 0x08  # DepthCompareOp
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.depth_test"
             requires_deserialize = True
             requires_pipeline_refresh = True
         elif dt_enable and new_op != dt_op:
@@ -483,6 +503,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
             overrides |= 0x08  # DepthCompareOp
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.depth_test"
             requires_deserialize = True
             requires_pipeline_refresh = True
 
@@ -514,6 +535,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                 overrides |= 0x20  # BlendMode
                 mat_data["renderStateOverrides"] = overrides
                 changed = True
+                change_key = "render_state.blend_mode"
                 requires_deserialize = True
                 requires_pipeline_refresh = True
 
@@ -529,6 +551,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
             overrides |= 0x100  # AlphaClip
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.alpha_clip"
             requires_deserialize = True
             requires_pipeline_refresh = True
         if rs.get("alphaClipEnabled", False):
@@ -539,6 +562,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                 overrides |= 0x100  # AlphaClip
                 mat_data["renderStateOverrides"] = overrides
                 changed = True
+                change_key = "render_state.alpha_threshold"
                 requires_deserialize = True
                 requires_pipeline_refresh = True
 
@@ -554,9 +578,11 @@ def render_material_body(ctx: InxGUIContext, panel, state):
             overrides |= 0x40  # RenderQueue
             mat_data["renderStateOverrides"] = overrides
             changed = True
+            change_key = "render_state.render_queue"
             requires_deserialize = True
             requires_pipeline_refresh = True
 
+    _record_profile_timing("materialSurface", section_t0)
     if is_builtin:
         ctx.end_disabled()
 
@@ -565,6 +591,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
     # ── Properties ─────────────────────────────────────────────────────
     if is_builtin:
         ctx.begin_disabled(True)
+    section_t0 = _time.perf_counter()
     if render_compact_section_header(ctx, t("material.properties_section"), level="secondary",
                                      default_open=default_open_sections):
         props = mat_data.get("properties", {})
@@ -586,8 +613,10 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                     else:
                         _apply_native_prop(prop_name, prop["value"], ptype)
                     changed = True
+                    change_key = f"property.{prop_name}"
                     if ptype == 6:  # Texture needs full deserialize
                         requires_deserialize = True
+    _record_profile_timing("materialProperties", section_t0)
     if is_builtin:
         ctx.end_disabled()
 
@@ -618,6 +647,7 @@ def render_material_body(ctx: InxGUIContext, panel, state):
                         new_json,
                         "Edit Material",
                         refresh_callback=lambda _mat: _refresh_pipeline(panel),
+                        edit_key=change_key,
                     ))
         except (RuntimeError, ValueError):
             pass
@@ -629,12 +659,14 @@ def render_inline_material_body(ctx: InxGUIContext, panel, native_mat, cache_key
     """Render a MeshRenderer-linked material using the shared material inspector."""
     if native_mat is None:
         return
+    inline_t0 = _time.perf_counter()
     state = _build_inline_state(panel, native_mat)
     ctx.push_id_str(cache_key or f"inline_material_{id(native_mat)}")
     try:
         render_material_body(ctx, panel, state)
     finally:
         ctx.pop_id()
+        _record_profile_timing("materialInline", inline_t0)
 
     # Inline materials don't go through render_asset_inspector's footer,
     # so the debounced save would never be flushed.  Drive it here.
