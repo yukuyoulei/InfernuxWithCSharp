@@ -99,8 +99,7 @@ void ToolbarPanel::RenderPlayControls(InxGUIContext *ctx, float winW)
         EditorTheme::PushFlatButtonStyle(EditorTheme::BTN_IDLE);
 
     std::string playLabel = isPlaying ? T("toolbar.stop") : T("toolbar.play");
-    if (ImGui::Button(playLabel.c_str()))
-    {
+    if (ImGui::Button(playLabel.c_str())) {
         if (onPlay)
             onPlay();
     }
@@ -117,8 +116,7 @@ void ToolbarPanel::RenderPlayControls(InxGUIContext *ctx, float winW)
         EditorTheme::PushFlatButtonStyle(EditorTheme::BTN_IDLE);
 
     std::string pauseLabel = isPaused ? T("toolbar.resume") : T("toolbar.pause");
-    if (ImGui::Button(pauseLabel.c_str()))
-    {
+    if (ImGui::Button(pauseLabel.c_str())) {
         if (isPlaying && onPause)
             onPause();
     }
@@ -133,16 +131,14 @@ void ToolbarPanel::RenderPlayControls(InxGUIContext *ctx, float winW)
         EditorTheme::PushFlatButtonStyle(EditorTheme::BTN_DISABLED);
 
     std::string stepLabel = T("toolbar.step");
-    if (ImGui::Button(stepLabel.c_str()))
-    {
+    if (ImGui::Button(stepLabel.c_str())) {
         if (isPaused && onStep)
             onStep();
     }
     ImGui::PopStyleColor(3);
 
     // ── Time label while playing ─────────────────────────────────
-    if (isPlaying)
-    {
+    if (isPlaying) {
         ImGui::SameLine(0.0f, 8.0f);
         std::string tag = isPaused ? T("toolbar.status_paused") : T("toolbar.status_playing");
         std::string timeStr = getPlayTimeStr ? getPlayTimeStr() : "00:00.000";
@@ -169,8 +165,7 @@ void ToolbarPanel::RenderRightDropdowns(InxGUIContext *ctx, float winW)
         ImGui::OpenPopup("##giz");
     ImGui::PopStyleColor(3);
 
-    if (ImGui::BeginPopup("##giz"))
-    {
+    if (ImGui::BeginPopup("##giz")) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, EditorTheme::POPUP_WIN_PAD);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, EditorTheme::POPUP_ITEM_SPC);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, EditorTheme::POPUP_FRAME_PAD);
@@ -188,8 +183,7 @@ void ToolbarPanel::RenderRightDropdowns(InxGUIContext *ctx, float winW)
         ImGui::OpenPopup("##cam");
     ImGui::PopStyleColor(3);
 
-    if (ImGui::BeginPopup("##cam"))
-    {
+    if (ImGui::BeginPopup("##cam")) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, EditorTheme::POPUP_WIN_PAD);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, EditorTheme::POPUP_ITEM_SPC);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, EditorTheme::POPUP_FRAME_PAD);
@@ -205,8 +199,7 @@ void ToolbarPanel::RenderRightDropdowns(InxGUIContext *ctx, float winW)
 
 void ToolbarPanel::PopupGizmos(InxGUIContext *ctx)
 {
-    if (!isShowGrid)
-    {
+    if (!isShowGrid) {
         ImGui::TextUnformatted(T("toolbar.engine_not_available").c_str());
         return;
     }
@@ -217,8 +210,7 @@ void ToolbarPanel::PopupGizmos(InxGUIContext *ctx)
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
     bool grid = isShowGrid();
-    if (ImGui::Checkbox(T("toolbar.show_grid").c_str(), &grid))
-    {
+    if (ImGui::Checkbox(T("toolbar.show_grid").c_str(), &grid)) {
         if (setShowGrid)
             setShowGrid(grid);
     }
@@ -260,10 +252,8 @@ void ToolbarPanel::PopupCamera(InxGUIContext *ctx)
 
     bool changed = false;
 
-    for (auto &p : params)
-    {
-        if (p.headerKey)
-        {
+    for (auto &p : params) {
+        if (p.headerKey) {
             ImGui::TextUnformatted(T(p.headerKey).c_str());
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -296,8 +286,7 @@ void ToolbarPanel::PopupCamera(InxGUIContext *ctx)
 
     // Reset button
     ImGui::Dummy(ImVec2(0.0f, 2.0f));
-    if (ImGui::Button(T("toolbar.reset_camera_settings").c_str(), ImVec2(-1.0f, 0.0f)))
-    {
+    if (ImGui::Button(T("toolbar.reset_camera_settings").c_str(), ImVec2(-1.0f, 0.0f))) {
         m_cameraSettings.fov = CAMERA_DEFAULTS_FOV;
         m_cameraSettings.rotationSpeed = CAMERA_DEFAULTS_ROTATION;
         m_cameraSettings.panSpeed = CAMERA_DEFAULTS_PAN;

@@ -51,8 +51,7 @@ class EditorPanel : public InxGUIRenderable
 
         bool visible = ImGui::Begin(label.c_str(), &m_isOpen, GetWindowFlags());
 
-        if (visible)
-        {
+        if (visible) {
             OnRenderContent(ctx);
         }
 

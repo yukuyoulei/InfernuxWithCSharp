@@ -50,8 +50,7 @@ class StatusBarPanel : public InxGUIRenderable
 
   private:
     void RenderContent(InxGUIContext *ctx, float dispW);
-    void RenderEngineStatus(InxGUIContext *ctx, float dispW, float leftZoneW,
-                            const std::string &text, float progress);
+    void RenderEngineStatus(InxGUIContext *ctx, float dispW, float leftZoneW, const std::string &text, float progress);
 
     const ImVec4 &LevelColor() const;
 

@@ -315,13 +315,11 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
 
     // Diagnostic: log per-call eligible count with queue range
     if (s_filterDiagFrames < 3) {
-        INXLOG_DEBUG("[DrawSceneFiltered] queue=[", queueMin, ",", queueMax,
-                     "] totalDC=", drawCalls().size(),
+        INXLOG_DEBUG("[DrawSceneFiltered] queue=[", queueMin, ",", queueMax, "] totalDC=", drawCalls().size(),
                      " eligible=", m_eligibleScratch.size());
         if (!m_eligibleScratch.empty()) {
             for (const auto &entry : m_eligibleScratch) {
-                INXLOG_DEBUG("  -> objId=", entry.dc->objectId,
-                             " mat='", entry.material->GetName(),
+                INXLOG_DEBUG("  -> objId=", entry.dc->objectId, " mat='", entry.material->GetName(),
                              "' queue=", entry.material->GetRenderQueue());
             }
         }

@@ -85,8 +85,7 @@ void HierarchyPanel::ClearSearch()
 
 void HierarchyPanel::ClearSelectionAndNotify()
 {
-    if (!isSelectionEmpty || isSelectionEmpty())
-    {
+    if (!isSelectionEmpty || isSelectionEmpty()) {
         if (clearSelection)
             clearSelection();
         NotifySelectionChanged();
@@ -125,8 +124,7 @@ void HierarchyPanel::ExpandToObject(uint64_t objId)
     if (!go)
         return;
     GameObject *parent = go->GetParent();
-    while (parent)
-    {
+    while (parent) {
         m_pendingExpandIds.insert(parent->GetID());
         parent = parent->GetParent();
     }
@@ -139,8 +137,7 @@ void HierarchyPanel::ExpandToObject(uint64_t objId)
 void HierarchyPanel::SyncSelectionCache()
 {
     m_selIds.clear();
-    if (getSelectedIds)
-    {
+    if (getSelectedIds) {
         auto ids = getSelectedIds();
         for (auto id : ids)
             m_selIds.insert(id);
@@ -158,12 +155,10 @@ void HierarchyPanel::NotifySelectionChanged()
     uint64_t primary = getPrimary ? getPrimary() : 0;
 
     // In UI mode, skip inspector for non-canvas objects
-    if (m_uiMode && primary != 0)
-    {
+    if (m_uiMode && primary != 0) {
         Scene *scene = SceneManager::Instance().GetActiveScene();
         GameObject *go = scene ? scene->FindByID(primary) : nullptr;
-        if (go && !IsInCanvasTree(go))
-        {
+        if (go && !IsInCanvasTree(go)) {
             if (onSelectionChangedUiEditor)
                 onSelectionChangedUiEditor(primary);
             return;
@@ -189,8 +184,7 @@ std::vector<GameObject *> HierarchyPanel::FilterHidden(const std::vector<std::un
 {
     std::vector<GameObject *> out;
     out.reserve(objects.size());
-    for (auto &obj : objects)
-    {
+    for (auto &obj : objects) {
         if (!IsHidden(obj->GetID()))
             out.push_back(obj.get());
     }
@@ -199,8 +193,7 @@ std::vector<GameObject *> HierarchyPanel::FilterHidden(const std::vector<std::un
 
 void HierarchyPanel::RefreshRootObjects(Scene *scene, bool allowStale)
 {
-    if (!scene)
-    {
+    if (!scene) {
         m_cachedRoots.clear();
         return;
     }
@@ -212,8 +205,7 @@ void HierarchyPanel::RefreshRootObjects(Scene *scene, bool allowStale)
                           static_cast<int>(m_cachedRoots.size()) >= STALE_ROOT_THRESHOLD &&
                           (now - m_lastRootRefreshTime) < STALE_ROOT_INTERVAL);
 
-    if (sceneKey != m_cachedSceneKey || (ver != m_cachedStructureVer && !canReuseStale))
-    {
+    if (sceneKey != m_cachedSceneKey || (ver != m_cachedStructureVer && !canReuseStale)) {
         m_cachedRoots = FilterHidden(scene->GetRootObjects());
         m_orderedIdsDirty = true;
         m_canvasRootsDirty = true;
@@ -263,12 +255,9 @@ bool HierarchyPanel::IsVisibleInSearch(GameObject *obj)
         return it->second;
 
     bool visible = MatchesSearch(obj);
-    if (!visible)
-    {
-        for (auto &child : obj->GetChildren())
-        {
-            if (!IsHidden(child->GetID()) && IsVisibleInSearch(child.get()))
-            {
+    if (!visible) {
+        for (auto &child : obj->GetChildren()) {
+            if (!IsHidden(child->GetID()) && IsVisibleInSearch(child.get())) {
                 visible = true;
                 break;
             }
@@ -283,8 +272,7 @@ std::vector<GameObject *> HierarchyPanel::FilterForSearch(const std::vector<Game
     if (!HasActiveSearch())
         return objects;
     std::vector<GameObject *> out;
-    for (auto *obj : objects)
-    {
+    for (auto *obj : objects) {
         if (IsVisibleInSearch(obj))
             out.push_back(obj);
     }
@@ -299,8 +287,7 @@ bool HierarchyPanel::IsInCanvasTree(GameObject *obj) const
 {
     // Walk to root and check if that root is in canvas root set
     GameObject *cur = obj;
-    while (true)
-    {
+    while (true) {
         GameObject *p = cur->GetParent();
         if (!p)
             break;
@@ -314,10 +301,8 @@ void HierarchyPanel::RefreshCanvasRootIds(const std::vector<GameObject *> &roots
     if (!m_canvasRootsDirty)
         return;
     m_canvasRootIds.clear();
-    if (hasCanvasDescendant)
-    {
-        for (auto *go : roots)
-        {
+    if (hasCanvasDescendant) {
+        for (auto *go : roots) {
             if (hasCanvasDescendant(go->GetID()))
                 m_canvasRootIds.insert(go->GetID());
         }
@@ -351,16 +336,14 @@ std::vector<uint64_t> HierarchyPanel::CollectOrderedIds(const std::vector<GameOb
     for (auto it = roots.rbegin(); it != roots.rend(); ++it)
         stack.push_back(*it);
 
-    while (!stack.empty())
-    {
+    while (!stack.empty()) {
         auto *obj = stack.back();
         stack.pop_back();
         if (!obj || IsHidden(obj->GetID()))
             continue;
         result.push_back(obj->GetID());
         auto &children = obj->GetChildren();
-        for (auto it = children.rbegin(); it != children.rend(); ++it)
-        {
+        for (auto it = children.rbegin(); it != children.rend(); ++it) {
             if (!IsHidden(it->get()->GetID()))
                 stack.push_back(it->get());
         }
@@ -387,8 +370,7 @@ std::vector<uint64_t> HierarchyPanel::TopoSortIds(Scene *scene, const std::vecto
 
     std::function<void(GameObject *)> walk = [&](GameObject *go) {
         uint64_t gid = go->GetID();
-        if (idSet.count(gid))
-        {
+        if (idSet.count(gid)) {
             ordered.push_back(gid);
             idSet.erase(gid);
         }
@@ -396,15 +378,13 @@ std::vector<uint64_t> HierarchyPanel::TopoSortIds(Scene *scene, const std::vecto
             walk(child.get());
     };
 
-    for (auto &root : scene->GetRootObjects())
-    {
+    for (auto &root : scene->GetRootObjects()) {
         walk(root.get());
         if (idSet.empty())
             break;
     }
     // Append any remaining IDs not found in tree
-    for (auto id : ids)
-    {
+    for (auto id : ids) {
         if (std::find(ordered.begin(), ordered.end(), id) == ordered.end())
             ordered.push_back(id);
     }
@@ -414,8 +394,7 @@ std::vector<uint64_t> HierarchyPanel::TopoSortIds(Scene *scene, const std::vecto
 bool HierarchyPanel::IsDescendantOf(GameObject *potentialChild, GameObject *potentialParent)
 {
     GameObject *cur = potentialChild;
-    while (cur)
-    {
+    while (cur) {
         if (cur->GetID() == potentialParent->GetID())
             return true;
         cur = cur->GetParent();
@@ -425,26 +404,20 @@ bool HierarchyPanel::IsDescendantOf(GameObject *potentialChild, GameObject *pote
 
 bool HierarchyPanel::ValidateReparent(GameObject *obj, uint64_t newParentId, GameObject *newParent)
 {
-    if (m_uiMode)
-    {
+    if (m_uiMode) {
         if (!IsInCanvasTree(obj))
             return false;
-        if (goHasCanvas && goHasCanvas(obj->GetID()))
-        {
+        if (goHasCanvas && goHasCanvas(obj->GetID())) {
             if (showWarning)
                 showWarning("Canvas can only be a root object.");
             return false;
         }
-    }
-    else
-    {
+    } else {
         if (IsInCanvasTree(obj))
             return false;
     }
-    if (goHasUiScreenComponent && goHasUiScreenComponent(obj->GetID()))
-    {
-        if (newParent == nullptr || (parentHasCanvasAncestor && !parentHasCanvasAncestor(newParentId)))
-        {
+    if (goHasUiScreenComponent && goHasUiScreenComponent(obj->GetID())) {
+        if (newParent == nullptr || (parentHasCanvasAncestor && !parentHasCanvasAncestor(newParentId))) {
             if (showWarning)
                 showWarning("UI components must be placed under a Canvas.");
             return false;
@@ -455,32 +428,25 @@ bool HierarchyPanel::ValidateReparent(GameObject *obj, uint64_t newParentId, Gam
 
 bool HierarchyPanel::ValidateMoveAdjacent(GameObject *obj, uint64_t newParentId, GameObject *newParent)
 {
-    if (m_uiMode)
-    {
+    if (m_uiMode) {
         if (!IsInCanvasTree(obj))
             return false;
-        if (goHasCanvas && goHasCanvas(obj->GetID()) && newParentId != 0)
-        {
+        if (goHasCanvas && goHasCanvas(obj->GetID()) && newParentId != 0) {
             if (showWarning)
                 showWarning("Canvas can only be a root object.");
             return false;
         }
-        if (goHasCanvas && !goHasCanvas(obj->GetID()) && newParentId == 0)
-        {
+        if (goHasCanvas && !goHasCanvas(obj->GetID()) && newParentId == 0) {
             if (showWarning)
                 showWarning("UI elements must be placed under a Canvas.");
             return false;
         }
-    }
-    else
-    {
+    } else {
         if (IsInCanvasTree(obj))
             return false;
     }
-    if (goHasUiScreenComponent && goHasUiScreenComponent(obj->GetID()))
-    {
-        if (newParentId == 0 || (newParent && parentHasCanvasAncestor && !parentHasCanvasAncestor(newParentId)))
-        {
+    if (goHasUiScreenComponent && goHasUiScreenComponent(obj->GetID())) {
+        if (newParentId == 0 || (newParent && parentHasCanvasAncestor && !parentHasCanvasAncestor(newParentId))) {
             if (showWarning)
                 showWarning("UI components must be placed under a Canvas.");
             return false;
@@ -501,8 +467,7 @@ void HierarchyPanel::ReparentObject(uint64_t draggedId, uint64_t newParentId)
     auto dragIds = GetDragIds(draggedId);
     auto sorted = TopoSortIds(scene, dragIds);
 
-    for (uint64_t did : sorted)
-    {
+    for (uint64_t did : sorted) {
         if (did == newParentId)
             continue;
         auto *obj = scene->FindByID(did);
@@ -542,8 +507,7 @@ void HierarchyPanel::MoveObjectAdjacent(uint64_t draggedId, uint64_t targetId, b
     auto sorted = TopoSortIds(scene, dragIds);
 
     std::vector<uint64_t> validIds;
-    for (uint64_t did : sorted)
-    {
+    for (uint64_t did : sorted) {
         if (did == targetId)
             continue;
         auto *obj = scene->FindByID(did);
@@ -561,8 +525,7 @@ void HierarchyPanel::MoveObjectAdjacent(uint64_t draggedId, uint64_t targetId, b
     int anchorIdx = targetObj->GetTransform() ? targetObj->GetTransform()->GetSiblingIndex() : 0;
     int insertIdx = anchorIdx + (after ? 1 : 0);
 
-    for (uint64_t did : validIds)
-    {
+    for (uint64_t did : validIds) {
         auto *obj = scene->FindByID(did);
         if (!obj)
             continue;
@@ -573,8 +536,7 @@ void HierarchyPanel::MoveObjectAdjacent(uint64_t draggedId, uint64_t targetId, b
         int effIdx = insertIdx;
         if (oldPid == newParentId && oldIdx < effIdx)
             effIdx--;
-        if (oldPid == newParentId && oldIdx == effIdx)
-        {
+        if (oldPid == newParentId && oldIdx == effIdx) {
             insertIdx++;
             continue;
         }
@@ -597,29 +559,23 @@ void HierarchyPanel::ReparentToRoot(uint64_t draggedId)
     auto dragIds = GetDragIds(draggedId);
     auto sorted = TopoSortIds(scene, dragIds);
 
-    for (uint64_t did : sorted)
-    {
+    for (uint64_t did : sorted) {
         auto *obj = scene->FindByID(did);
         if (!obj)
             continue;
-        if (m_uiMode)
-        {
+        if (m_uiMode) {
             if (!IsInCanvasTree(obj))
                 continue;
-            if (goHasCanvas && !goHasCanvas(obj->GetID()))
-            {
+            if (goHasCanvas && !goHasCanvas(obj->GetID())) {
                 if (showWarning)
                     showWarning("UI elements must be placed under a Canvas.");
                 continue;
             }
-        }
-        else
-        {
+        } else {
             if (IsInCanvasTree(obj))
                 continue;
         }
-        if (goHasUiScreenComponent && goHasUiScreenComponent(obj->GetID()))
-        {
+        if (goHasUiScreenComponent && goHasUiScreenComponent(obj->GetID())) {
             if (showWarning)
                 showWarning("UI components must be placed under a Canvas.");
             continue;
@@ -630,8 +586,7 @@ void HierarchyPanel::ReparentToRoot(uint64_t draggedId)
         int oldIdx = obj->GetTransform() ? obj->GetTransform()->GetSiblingIndex() : 0;
         int rootCount = static_cast<int>(scene->GetRootObjects().size());
         int newIdx = (std::max)(0, rootCount - (oldPid == 0 ? 1 : 0));
-        if (oldPid != 0 || oldIdx != newIdx)
-        {
+        if (oldPid != 0 || oldIdx != newIdx) {
             if (undoRecordMove)
                 undoRecordMove(did, oldPid, 0, oldIdx, newIdx);
         }
@@ -641,15 +596,13 @@ void HierarchyPanel::ReparentToRoot(uint64_t draggedId)
 void HierarchyPanel::HandleExternalDrop(const std::string &dropType, uint64_t payload, uint64_t parentId)
 {
     // In Prefab Mode, force under prefab root
-    if (isPrefabMode && isPrefabMode() && parentId == 0)
-    {
+    if (isPrefabMode && isPrefabMode() && parentId == 0) {
         Scene *scene = SceneManager::Instance().GetActiveScene();
         if (scene && !scene->GetRootObjects().empty())
             parentId = scene->GetRootObjects()[0]->GetID();
     }
 
-    if (dropType == DRAG_DROP_TYPE)
-    {
+    if (dropType == DRAG_DROP_TYPE) {
         if (parentId == 0)
             ReparentToRoot(payload);
         else
@@ -660,21 +613,17 @@ void HierarchyPanel::HandleExternalDrop(const std::string &dropType, uint64_t pa
 void HierarchyPanel::HandleExternalDropStr(const std::string &dropType, const std::string &payload, uint64_t parentId)
 {
     // In Prefab Mode, force under prefab root
-    if (isPrefabMode && isPrefabMode() && parentId == 0)
-    {
+    if (isPrefabMode && isPrefabMode() && parentId == 0) {
         Scene *scene = SceneManager::Instance().GetActiveScene();
         if (scene && !scene->GetRootObjects().empty())
             parentId = scene->GetRootObjects()[0]->GetID();
     }
 
-    if (dropType == "PREFAB_GUID" || dropType == "PREFAB_FILE")
-    {
+    if (dropType == "PREFAB_GUID" || dropType == "PREFAB_FILE") {
         bool isGuid = (dropType == "PREFAB_GUID");
         if (instantiatePrefab)
             instantiatePrefab(payload, parentId, isGuid);
-    }
-    else if (dropType == "MODEL_GUID" || dropType == "MODEL_FILE")
-    {
+    } else if (dropType == "MODEL_GUID" || dropType == "MODEL_FILE") {
         bool isGuid = (dropType == "MODEL_GUID");
         if (createModelObject)
             createModelObject(payload, parentId, isGuid);
@@ -709,11 +658,9 @@ void HierarchyPanel::CommitRename()
         newName.erase(newName.begin());
     while (!newName.empty() && newName.back() == ' ')
         newName.pop_back();
-    if (!newName.empty())
-    {
+    if (!newName.empty()) {
         Scene *scene = SceneManager::Instance().GetActiveScene();
-        if (scene)
-        {
+        if (scene) {
             auto *obj = scene->FindByID(m_renameId);
             if (obj)
                 obj->SetName(newName);
@@ -740,20 +687,17 @@ void HierarchyPanel::HandleClipboardShortcuts(InxGUIContext *ctx)
     if (!IsCtrl(ctx))
         return;
 
-    if (ctx->IsKeyPressed(kKeyC))
-    {
+    if (ctx->IsKeyPressed(kKeyC)) {
         if (copySelected)
             copySelected(false);
         return;
     }
-    if (ctx->IsKeyPressed(kKeyX))
-    {
+    if (ctx->IsKeyPressed(kKeyX)) {
         if (copySelected)
             copySelected(true);
         return;
     }
-    if (ctx->IsKeyPressed(kKeyV))
-    {
+    if (ctx->IsKeyPressed(kKeyV)) {
         if (pasteClipboard)
             pasteClipboard();
     }
@@ -763,27 +707,23 @@ void HierarchyPanel::HandleClipboardShortcuts(InxGUIContext *ctx)
 // Reorder separator helper
 // ════════════════════════════════════════════════════════════════════
 
-void HierarchyPanel::RenderReorderSep(InxGUIContext *ctx, const char *sepId,
-                                       std::function<void(uint64_t)> onDrop)
+void HierarchyPanel::RenderReorderSep(InxGUIContext *ctx, const char *sepId, std::function<void(uint64_t)> onDrop)
 {
     float availW = ctx->GetContentRegionAvailWidth();
     ctx->InvisibleButton(sepId, availW, EditorTheme::DND_REORDER_SEPARATOR_H);
     ctx->PushStyleColor(ImGuiCol_DragDropTarget, 0.0f, 0.0f, 0.0f, 0.0f);
-    if (ctx->BeginDragDropTarget())
-    {
+    if (ctx->BeginDragDropTarget()) {
         // Draw separator line at midpoint
         float minY = ctx->GetItemRectMinY();
         float maxY = ctx->GetItemRectMaxY();
         float midY = (minY + maxY) * 0.5f;
         float x1 = ctx->GetItemRectMinX();
         float x2 = x1 + availW;
-        ctx->DrawLine(x1, midY, x2, midY,
-                      EditorTheme::DND_REORDER_LINE.x, EditorTheme::DND_REORDER_LINE.y,
+        ctx->DrawLine(x1, midY, x2, midY, EditorTheme::DND_REORDER_LINE.x, EditorTheme::DND_REORDER_LINE.y,
                       EditorTheme::DND_REORDER_LINE.z, EditorTheme::DND_REORDER_LINE.w,
                       EditorTheme::DND_REORDER_LINE_THICKNESS);
         uint64_t payload = 0;
-        if (ctx->AcceptDragDropPayload(DRAG_DROP_TYPE, &payload))
-        {
+        if (ctx->AcceptDragDropPayload(DRAG_DROP_TYPE, &payload)) {
             if (onDrop)
                 onDrop(payload);
         }
@@ -799,20 +739,16 @@ void HierarchyPanel::RenderReorderSep(InxGUIContext *ctx, const char *sepId,
 void HierarchyPanel::RenderMultiDropTarget(InxGUIContext *ctx, uint64_t parentId)
 {
     ctx->PushStyleColor(ImGuiCol_DragDropTarget, 0.0f, 0.0f, 0.0f, 0.0f);
-    if (ctx->BeginDragDropTarget())
-    {
+    if (ctx->BeginDragDropTarget()) {
         // Accept HIERARCHY_GAMEOBJECT (uint64_t payload)
         uint64_t payload = 0;
-        if (ctx->AcceptDragDropPayload(DRAG_DROP_TYPE, &payload))
-        {
+        if (ctx->AcceptDragDropPayload(DRAG_DROP_TYPE, &payload)) {
             HandleExternalDrop(DRAG_DROP_TYPE, payload, parentId);
         }
         // Accept string payloads
-        for (const char *dt : {"MODEL_GUID", "MODEL_FILE", "PREFAB_GUID", "PREFAB_FILE"})
-        {
+        for (const char *dt : {"MODEL_GUID", "MODEL_FILE", "PREFAB_GUID", "PREFAB_FILE"}) {
             std::string strPayload;
-            if (ctx->AcceptDragDropPayload(dt, &strPayload))
-            {
+            if (ctx->AcceptDragDropPayload(dt, &strPayload)) {
                 HandleExternalDropStr(dt, strPayload, parentId);
                 break;
             }
@@ -834,16 +770,11 @@ void HierarchyPanel::ShowCreatePrimitiveMenu(InxGUIContext *ctx, uint64_t parent
         int typeIdx;
     };
     static const PrimEntry entries[] = {
-        {"hierarchy.primitive_cube", 0},
-        {"hierarchy.primitive_sphere", 1},
-        {"hierarchy.primitive_capsule", 2},
-        {"hierarchy.primitive_cylinder", 3},
-        {"hierarchy.primitive_plane", 4},
+        {"hierarchy.primitive_cube", 0},     {"hierarchy.primitive_sphere", 1}, {"hierarchy.primitive_capsule", 2},
+        {"hierarchy.primitive_cylinder", 3}, {"hierarchy.primitive_plane", 4},
     };
-    for (auto &e : entries)
-    {
-        if (ctx->Selectable(Tr(e.key), false, 0, 0, 0))
-        {
+    for (auto &e : entries) {
+        if (ctx->Selectable(Tr(e.key), false, 0, 0, 0)) {
             if (createPrimitive)
                 createPrimitive(e.typeIdx, parentId);
         }
@@ -862,10 +793,8 @@ void HierarchyPanel::ShowCreateLightMenu(InxGUIContext *ctx, uint64_t parentId)
         {"hierarchy.light_point", 1},
         {"hierarchy.light_spot", 2},
     };
-    for (auto &e : entries)
-    {
-        if (ctx->Selectable(Tr(e.key), false, 0, 0, 0))
-        {
+    for (auto &e : entries) {
+        if (ctx->Selectable(Tr(e.key), false, 0, 0, 0)) {
             if (createLight)
                 createLight(e.typeIdx, parentId);
         }
@@ -874,13 +803,11 @@ void HierarchyPanel::ShowCreateLightMenu(InxGUIContext *ctx, uint64_t parentId)
 
 void HierarchyPanel::ShowCreateRenderingMenu(InxGUIContext *ctx, uint64_t parentId)
 {
-    if (ctx->Selectable(Tr("hierarchy.camera"), false, 0, 0, 0))
-    {
+    if (ctx->Selectable(Tr("hierarchy.camera"), false, 0, 0, 0)) {
         if (createCamera)
             createCamera(parentId);
     }
-    if (ctx->Selectable(Tr("hierarchy.render_stack"), false, 0, 0, 0))
-    {
+    if (ctx->Selectable(Tr("hierarchy.render_stack"), false, 0, 0, 0)) {
         if (createRenderStack)
             createRenderStack(parentId);
     }
@@ -888,8 +815,7 @@ void HierarchyPanel::ShowCreateRenderingMenu(InxGUIContext *ctx, uint64_t parent
 
 void HierarchyPanel::ShowUiMenu(InxGUIContext *ctx, uint64_t parentId)
 {
-    if (ctx->Selectable(Tr("hierarchy.ui_canvas"), false, 0, 0, 0))
-    {
+    if (ctx->Selectable(Tr("hierarchy.ui_canvas"), false, 0, 0, 0)) {
         if (createUiCanvas)
             createUiCanvas(parentId);
     }
@@ -898,13 +824,11 @@ void HierarchyPanel::ShowUiMenu(InxGUIContext *ctx, uint64_t parentId)
 void HierarchyPanel::ShowUiModeContextMenu(InxGUIContext *ctx, uint64_t parentId)
 {
     ShowUiMenu(ctx, parentId);
-    if (ctx->Selectable(Tr("hierarchy.ui_text"), false, 0, 0, 0))
-    {
+    if (ctx->Selectable(Tr("hierarchy.ui_text"), false, 0, 0, 0)) {
         if (createUiText)
             createUiText(parentId);
     }
-    if (ctx->Selectable(Tr("hierarchy.ui_button"), false, 0, 0, 0))
-    {
+    if (ctx->Selectable(Tr("hierarchy.ui_button"), false, 0, 0, 0)) {
         if (createUiButton)
             createUiButton(parentId);
     }
@@ -916,8 +840,7 @@ void HierarchyPanel::ShowUiModeContextMenu(InxGUIContext *ctx, uint64_t parentId
 
 void HierarchyPanel::RenderRenameInput(InxGUIContext *ctx, GameObject *obj)
 {
-    if (m_renameFocus)
-    {
+    if (m_renameFocus) {
         ctx->SetKeyboardFocusHere();
         m_renameFocus = false;
     }
@@ -926,13 +849,11 @@ void HierarchyPanel::RenderRenameInput(InxGUIContext *ctx, GameObject *obj)
     ctx->SetNextItemWidth(availW);
     ctx->InputTextWithHint("##rename", "", m_renameBuf, sizeof(m_renameBuf), 0);
 
-    if (ctx->IsKeyPressed(kKeyEnter))
-    {
+    if (ctx->IsKeyPressed(kKeyEnter)) {
         CommitRename();
         return;
     }
-    if (ctx->IsKeyPressed(kKeyEscape))
-    {
+    if (ctx->IsKeyPressed(kKeyEscape)) {
         CancelRename();
         return;
     }
@@ -955,16 +876,15 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
     ctx->PushID(std::to_string(objId));
 
     // ── Inline rename mode ──────────────────────────────────────
-    if (m_renameId == objId)
-    {
+    if (m_renameId == objId) {
         RenderRenameInput(ctx, obj);
         ctx->PopID();
         return;
     }
 
     // Tree node flags
-    int nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth |
-                    ImGuiTreeNodeFlags_FramePadding;
+    int nodeFlags =
+        ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
 
     if (m_selIds.count(objId))
         nodeFlags |= ImGuiTreeNodeFlags_Selected;
@@ -978,42 +898,31 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
         nodeFlags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
     // Auto-expansion
-    if (m_pendingExpandId == objId)
-    {
+    if (m_pendingExpandId == objId) {
         ctx->SetNextItemOpen(true);
         m_pendingExpandId = 0;
     }
-    if (m_pendingExpandIds.count(objId))
-    {
+    if (m_pendingExpandIds.count(objId)) {
         ctx->SetNextItemOpen(true);
         m_pendingExpandIds.erase(objId);
-    }
-    else if (HasActiveSearch() && !children.empty())
-    {
+    } else if (HasActiveSearch() && !children.empty()) {
         ctx->SetNextItemOpen(true);
     }
 
     // Display name with prefab decoration
     bool isPrefab = obj->IsPrefabInstance();
-    std::string displayName = isPrefab
-                                  ? std::string(EditorTheme::PREFAB_ICON) + " " + obj->GetName()
-                                  : obj->GetName();
+    std::string displayName = isPrefab ? std::string(EditorTheme::PREFAB_ICON) + " " + obj->GetName() : obj->GetName();
 
     // Dim objects that don't belong to the current mode's domain
     bool inCanvas = IsInCanvasTree(obj);
     bool uiDimmed = (m_uiMode && !inCanvas) || (!m_uiMode && inCanvas);
     int textColorPushed = 0;
-    if (uiDimmed)
-    {
-        ctx->PushStyleColor(ImGuiCol_Text,
-                            EditorTheme::TEXT_DISABLED.x, EditorTheme::TEXT_DISABLED.y,
+    if (uiDimmed) {
+        ctx->PushStyleColor(ImGuiCol_Text, EditorTheme::TEXT_DISABLED.x, EditorTheme::TEXT_DISABLED.y,
                             EditorTheme::TEXT_DISABLED.z, EditorTheme::TEXT_DISABLED.w);
         textColorPushed = 1;
-    }
-    else if (isPrefab)
-    {
-        ctx->PushStyleColor(ImGuiCol_Text,
-                            EditorTheme::PREFAB_TEXT.x, EditorTheme::PREFAB_TEXT.y,
+    } else if (isPrefab) {
+        ctx->PushStyleColor(ImGuiCol_Text, EditorTheme::PREFAB_TEXT.x, EditorTheme::PREFAB_TEXT.y,
                             EditorTheme::PREFAB_TEXT.z, EditorTheme::PREFAB_TEXT.w);
         textColorPushed = 1;
     }
@@ -1024,18 +933,15 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
         ctx->PopStyleColor(1);
 
     // ── Selection ───────────────────────────────────────────────
-    if (ctx->IsItemClicked(0))
-    {
+    if (ctx->IsItemClicked(0)) {
         if (m_renameId && m_renameId != objId)
             CancelRename();
         m_pendingSelectId = objId;
         m_pendingCtrl = IsCtrl(ctx);
         m_pendingShift = IsShift(ctx);
     }
-    if (ctx->IsItemClicked(1))
-    {
-        if (!m_selIds.count(objId))
-        {
+    if (ctx->IsItemClicked(1)) {
+        if (!m_selIds.count(objId)) {
             if (selectId)
                 selectId(objId);
             SyncSelectionCache();
@@ -1044,55 +950,45 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
     }
 
     // Double-click focus
-    if (ctx->IsMouseDoubleClicked(0) && ctx->IsItemHovered())
-    {
+    if (ctx->IsMouseDoubleClicked(0) && ctx->IsItemHovered()) {
         if (onDoubleClickFocus)
             onDoubleClickFocus(objId);
     }
 
     // ── Context menu ────────────────────────────────────────────
     std::string ctxMenuId = "ctx_menu_" + std::to_string(objId);
-    if (ctx->BeginPopupContextItem(ctxMenuId, 1))
-    {
+    if (ctx->BeginPopupContextItem(ctxMenuId, 1)) {
         m_rightClickedObjId = objId;
 
-        if (ctx->BeginMenu(Tr("hierarchy.create_child")))
-        {
-            if (ctx->BeginMenu(Tr("hierarchy.create_3d_object")))
-            {
+        if (ctx->BeginMenu(Tr("hierarchy.create_child"))) {
+            if (ctx->BeginMenu(Tr("hierarchy.create_3d_object"))) {
                 ShowCreatePrimitiveMenu(ctx, objId);
                 ctx->EndMenu();
             }
-            if (ctx->BeginMenu(Tr("hierarchy.light_menu")))
-            {
+            if (ctx->BeginMenu(Tr("hierarchy.light_menu"))) {
                 ShowCreateLightMenu(ctx, objId);
                 ctx->EndMenu();
             }
-            if (ctx->BeginMenu(Tr("hierarchy.rendering_menu")))
-            {
+            if (ctx->BeginMenu(Tr("hierarchy.rendering_menu"))) {
                 ShowCreateRenderingMenu(ctx, objId);
                 ctx->EndMenu();
             }
-            if (ctx->Selectable(Tr("hierarchy.empty_object"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.empty_object"), false, 0, 0, 0)) {
                 if (createEmpty)
                     createEmpty(objId);
             }
             ctx->EndMenu();
         }
         ctx->Separator();
-        if (ctx->Selectable(Tr("project.copy"), false, 0, 0, 0))
-        {
+        if (ctx->Selectable(Tr("project.copy"), false, 0, 0, 0)) {
             if (copySelected)
                 copySelected(false);
         }
-        if (ctx->Selectable(Tr("project.cut"), false, 0, 0, 0))
-        {
+        if (ctx->Selectable(Tr("project.cut"), false, 0, 0, 0)) {
             if (copySelected)
                 copySelected(true);
         }
-        if (ctx->Selectable(Tr("project.paste"), false, 0, 0, 0))
-        {
+        if (ctx->Selectable(Tr("project.paste"), false, 0, 0, 0)) {
             if (pasteClipboard)
                 pasteClipboard();
         }
@@ -1100,56 +996,46 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
         if (ctx->Selectable(Tr("hierarchy.rename"), false, 0, 0, 0))
             BeginRename(objId);
         ctx->Separator();
-        if (ctx->Selectable(Tr("hierarchy.save_as_prefab"), false, 0, 0, 0))
-        {
+        if (ctx->Selectable(Tr("hierarchy.save_as_prefab"), false, 0, 0, 0)) {
             if (saveAsPrefab)
                 saveAsPrefab(objId);
         }
 
         // Prefab instance actions
-        if (isPrefab)
-        {
+        if (isPrefab) {
             ctx->Separator();
-            ctx->PushStyleColor(ImGuiCol_Text,
-                                EditorTheme::PREFAB_TEXT.x, EditorTheme::PREFAB_TEXT.y,
+            ctx->PushStyleColor(ImGuiCol_Text, EditorTheme::PREFAB_TEXT.x, EditorTheme::PREFAB_TEXT.y,
                                 EditorTheme::PREFAB_TEXT.z, EditorTheme::PREFAB_TEXT.w);
             ctx->Label(Tr("hierarchy.prefab_label"));
             ctx->PopStyleColor(1);
-            if (ctx->Selectable(Tr("hierarchy.select_prefab_asset"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.select_prefab_asset"), false, 0, 0, 0)) {
                 if (prefabSelectAsset)
                     prefabSelectAsset(objId);
             }
-            if (ctx->Selectable(Tr("hierarchy.open_prefab"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.open_prefab"), false, 0, 0, 0)) {
                 if (prefabOpenAsset)
                     prefabOpenAsset(objId);
             }
-            if (ctx->Selectable(Tr("hierarchy.apply_all_overrides"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.apply_all_overrides"), false, 0, 0, 0)) {
                 if (prefabApplyOverrides)
                     prefabApplyOverrides(objId);
             }
-            if (ctx->Selectable(Tr("hierarchy.revert_all_overrides"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.revert_all_overrides"), false, 0, 0, 0)) {
                 if (prefabRevertOverrides)
                     prefabRevertOverrides(objId);
             }
             ctx->Separator();
-            if (ctx->Selectable(Tr("hierarchy.unpack_prefab"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.unpack_prefab"), false, 0, 0, 0)) {
                 if (prefabUnpack)
                     prefabUnpack(objId);
             }
         }
 
         ctx->Separator();
-        if (ctx->Selectable(Tr("hierarchy.delete"), false, 0, 0, 0))
-        {
+        if (ctx->Selectable(Tr("hierarchy.delete"), false, 0, 0, 0)) {
             if (undoRecordDelete)
                 undoRecordDelete(objId, "Delete GameObject");
-            if (m_selIds.count(objId))
-            {
+            if (m_selIds.count(objId)) {
                 if (clearSelection)
                     clearSelection();
                 SyncSelectionCache();
@@ -1161,8 +1047,7 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
 
     // ── Drag source ─────────────────────────────────────────────
     bool canDrag = (m_uiMode && inCanvas) || (!m_uiMode && !inCanvas);
-    if (canDrag && ctx->BeginDragDropSource(0))
-    {
+    if (canDrag && ctx->BeginDragDropSource(0)) {
         ctx->SetDragDropPayload(DRAG_DROP_TYPE, objId);
         int n = m_selIds.count(objId) ? m_selCount : 1;
         if (n > 1)
@@ -1175,16 +1060,13 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
     // ── Drop target on body → reparent as child ─────────────────
     RenderMultiDropTarget(ctx, objId);
 
-    if (isOpen && !isLeaf)
-    {
+    if (isOpen && !isLeaf) {
         // Separator before first child
-        if (!children.empty())
-        {
+        if (!children.empty()) {
             uint64_t firstId = children[0]->GetID();
             std::string sepId = "##sep_before_first_" + std::to_string(objId);
-            RenderReorderSep(ctx, sepId.c_str(), [this, firstId](uint64_t payload) {
-                MoveObjectAdjacent(payload, firstId, false);
-            });
+            RenderReorderSep(ctx, sepId.c_str(),
+                             [this, firstId](uint64_t payload) { MoveObjectAdjacent(payload, firstId, false); });
         }
         for (auto *child : children)
             RenderGameObjectTree(ctx, child);
@@ -1193,9 +1075,8 @@ void HierarchyPanel::RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj)
 
     // Separator after this node
     std::string sepAfterId = "##sep_after_" + std::to_string(objId);
-    RenderReorderSep(ctx, sepAfterId.c_str(), [this, objId](uint64_t payload) {
-        MoveObjectAdjacent(payload, objId, true);
-    });
+    RenderReorderSep(ctx, sepAfterId.c_str(),
+                     [this, objId](uint64_t payload) { MoveObjectAdjacent(payload, objId, true); });
 
     ctx->PopID();
 }
@@ -1216,15 +1097,12 @@ void HierarchyPanel::PreRender(InxGUIContext *ctx)
     SyncSelectionCache();
 
     // Keyboard shortcuts (F2 rename, Delete)
-    if (!ctx->WantTextInput() && m_selCount > 0)
-    {
-        if (ctx->IsKeyPressed(kKeyF2) && m_renameId == 0)
-        {
+    if (!ctx->WantTextInput() && m_selCount > 0) {
+        if (ctx->IsKeyPressed(kKeyF2) && m_renameId == 0) {
             if (m_selPrimary)
                 BeginRename(m_selPrimary);
         }
-        if (ctx->IsKeyPressed(kKeyDelete))
-        {
+        if (ctx->IsKeyPressed(kKeyDelete)) {
             if (deleteSelectedObjects)
                 deleteSelectedObjects();
             SyncSelectionCache();
@@ -1232,21 +1110,16 @@ void HierarchyPanel::PreRender(InxGUIContext *ctx)
     }
 
     // Deferred left-click selection
-    if (m_pendingSelectId != 0)
-    {
-        if (!ctx->IsMouseButtonDown(0))
-        {
-            if (!ctx->IsMouseDragging(0))
-            {
+    if (m_pendingSelectId != 0) {
+        if (!ctx->IsMouseButtonDown(0)) {
+            if (!ctx->IsMouseDragging(0)) {
                 uint64_t pid = m_pendingSelectId;
 
                 // In UI mode, block selection of non-canvas objects
-                if (m_uiMode)
-                {
+                if (m_uiMode) {
                     Scene *scene = SceneManager::Instance().GetActiveScene();
                     auto *go = scene ? scene->FindByID(pid) : nullptr;
-                    if (go && !IsInCanvasTree(go))
-                    {
+                    if (go && !IsInCanvasTree(go)) {
                         m_pendingSelectId = 0;
                         m_pendingCtrl = false;
                         m_pendingShift = false;
@@ -1254,32 +1127,24 @@ void HierarchyPanel::PreRender(InxGUIContext *ctx)
                     }
                 }
 
-                if (m_pendingCtrl)
-                {
+                if (m_pendingCtrl) {
                     if (toggleId)
                         toggleId(pid);
-                }
-                else if (m_pendingShift)
-                {
+                } else if (m_pendingShift) {
                     Scene *scene = SceneManager::Instance().GetActiveScene();
-                    if (scene)
-                    {
-                        if (m_orderedIdsDirty)
-                        {
+                    if (scene) {
+                        if (m_orderedIdsDirty) {
                             m_cachedOrderedIds = CollectOrderedIds(m_cachedRoots);
                             m_orderedIdsDirty = false;
                         }
-                        auto searchFiltered = HasActiveSearch()
-                                                  ? CollectOrderedIds(FilterForSearch(m_cachedRoots))
-                                                  : m_cachedOrderedIds;
+                        auto searchFiltered =
+                            HasActiveSearch() ? CollectOrderedIds(FilterForSearch(m_cachedRoots)) : m_cachedOrderedIds;
                         if (setOrderedIds)
                             setOrderedIds(searchFiltered);
                     }
                     if (rangeSelectId)
                         rangeSelectId(pid);
-                }
-                else
-                {
+                } else {
                     if (selectId)
                         selectId(pid);
                 }
@@ -1289,9 +1154,7 @@ void HierarchyPanel::PreRender(InxGUIContext *ctx)
             m_pendingSelectId = 0;
             m_pendingCtrl = false;
             m_pendingShift = false;
-        }
-        else if (ctx->IsMouseDragging(0))
-        {
+        } else if (ctx->IsMouseDragging(0)) {
             m_pendingSelectId = 0;
             m_pendingCtrl = false;
             m_pendingShift = false;
@@ -1308,26 +1171,19 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
     HandleClipboardShortcuts(ctx);
 
     // ── Header: scene name / prefab mode / ui mode ──────────────
-    if (m_uiMode)
-    {
+    if (m_uiMode) {
         ctx->Label(Tr("hierarchy.ui_mode"));
-    }
-    else if (isPrefabMode && isPrefabMode())
-    {
+    } else if (isPrefabMode && isPrefabMode()) {
         std::string prefabName = getPrefabDisplayName ? getPrefabDisplayName() : "Prefab";
-        ctx->PushStyleColor(ImGuiCol_Text,
-                            EditorTheme::PREFAB_TEXT.x, EditorTheme::PREFAB_TEXT.y,
+        ctx->PushStyleColor(ImGuiCol_Text, EditorTheme::PREFAB_TEXT.x, EditorTheme::PREFAB_TEXT.y,
                             EditorTheme::PREFAB_TEXT.z, EditorTheme::PREFAB_TEXT.w);
         ctx->Label(prefabName);
         ctx->PopStyleColor(1);
-    }
-    else
-    {
+    } else {
         std::string displayName = getSceneDisplayName ? getSceneDisplayName() : "";
         if (!displayName.empty())
             ctx->Label(displayName);
-        else
-        {
+        else {
             Scene *scene = SceneManager::Instance().GetActiveScene();
             ctx->Label(scene ? scene->GetName() : Tr("hierarchy.no_scene"));
         }
@@ -1337,20 +1193,17 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
     ctx->SetNextItemWidth(ctx->GetContentRegionAvailWidth());
     std::strncpy(m_searchBuf, m_searchQuery.c_str(), sizeof(m_searchBuf) - 1);
     m_searchBuf[sizeof(m_searchBuf) - 1] = '\0';
-    ctx->InputTextWithHint("##HierarchySearch", Tr("hierarchy.search_placeholder").c_str(),
-                           m_searchBuf, sizeof(m_searchBuf), 0);
+    ctx->InputTextWithHint("##HierarchySearch", Tr("hierarchy.search_placeholder").c_str(), m_searchBuf,
+                           sizeof(m_searchBuf), 0);
     SetSearchQuery(m_searchBuf);
 
     ctx->Separator();
 
     // ── Scene tree ──────────────────────────────────────────────
     Scene *scene = SceneManager::Instance().GetActiveScene();
-    if (scene)
-    {
-        ctx->PushStyleVarVec2(ImGuiStyleVar_ItemSpacing,
-                              EditorTheme::TREE_ITEM_SPC.x, EditorTheme::TREE_ITEM_SPC.y);
-        ctx->PushStyleVarVec2(ImGuiStyleVar_FramePadding,
-                              EditorTheme::TREE_FRAME_PAD.x, EditorTheme::TREE_FRAME_PAD.y);
+    if (scene) {
+        ctx->PushStyleVarVec2(ImGuiStyleVar_ItemSpacing, EditorTheme::TREE_ITEM_SPC.x, EditorTheme::TREE_ITEM_SPC.y);
+        ctx->PushStyleVarVec2(ImGuiStyleVar_FramePadding, EditorTheme::TREE_FRAME_PAD.x, EditorTheme::TREE_FRAME_PAD.y);
         ctx->PushStyleVarFloat(ImGuiStyleVar_IndentSpacing, EditorTheme::TREE_INDENT);
 
         bool allowStale = !ctx->IsWindowFocused(0) && !ctx->IsWindowHovered() && !m_cachedRoots.empty();
@@ -1363,23 +1216,17 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
         int nRoots = static_cast<int>(visibleRoots.size());
 
         // Root-level insertion line before first root
-        if (nRoots > 0)
-        {
+        if (nRoots > 0) {
             uint64_t firstRootId = visibleRoots[0]->GetID();
             RenderReorderSep(ctx, "##sep_before_first_root", [this, firstRootId](uint64_t payload) {
                 MoveObjectAdjacent(payload, firstRootId, false);
             });
-        }
-        else
-        {
-            RenderReorderSep(ctx, "##sep_empty_root", [this](uint64_t payload) {
-                ReparentToRoot(payload);
-            });
+        } else {
+            RenderReorderSep(ctx, "##sep_empty_root", [this](uint64_t payload) { ReparentToRoot(payload); });
         }
 
         // ── Virtual scrolling ───────────────────────────────────
-        if (nRoots > 0)
-        {
+        if (nRoots > 0) {
             float availW = ctx->GetContentRegionAvailWidth();
             float scrollY = ctx->GetScrollY();
             float viewportH = ctx->GetContentRegionAvailHeight();
@@ -1389,20 +1236,17 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
             float itemH = m_cachedItemHeight;
 
             int firstVis = (std::max)(0, static_cast<int>((scrollY - startY) / itemH) - 1);
-            int lastVis = (std::min)(nRoots - 1,
-                                     static_cast<int>((scrollY + viewportH - startY) / itemH) + 2);
+            int lastVis = (std::min)(nRoots - 1, static_cast<int>((scrollY + viewportH - startY) / itemH) + 2);
 
             if (firstVis > 0)
                 ctx->Dummy(availW, static_cast<float>(firstVis) * itemH);
 
-            for (int i = firstVis; i <= lastVis; i++)
-            {
+            for (int i = firstVis; i <= lastVis; i++) {
                 float beforeY = ctx->GetCursorPosY();
                 RenderGameObjectTree(ctx, visibleRoots[i]);
                 float afterY = ctx->GetCursorPosY();
                 float actualH = afterY - beforeY;
-                if (actualH > 1.0f && !m_itemHeightMeasured)
-                {
+                if (actualH > 1.0f && !m_itemHeightMeasured) {
                     m_cachedItemHeight = actualH;
                     itemH = actualH;
                     m_itemHeightMeasured = true;
@@ -1416,43 +1260,35 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
 
         // ── Tail drop zone ──────────────────────────────────────
         float remainingH = ctx->GetContentRegionAvailHeight();
-        if (remainingH > 4.0f)
-        {
+        if (remainingH > 4.0f) {
             float tailW = ctx->GetContentRegionAvailWidth();
             ctx->InvisibleButton("##drop_to_root_tail", tailW, remainingH);
 
-            if (ctx->IsItemClicked(0))
-            {
+            if (ctx->IsItemClicked(0)) {
                 CancelRename();
                 ClearSelectionAndNotify();
             }
 
             // Drop target with top-edge line
             ctx->PushStyleColor(ImGuiCol_DragDropTarget, 0.0f, 0.0f, 0.0f, 0.0f);
-            if (ctx->BeginDragDropTarget())
-            {
+            if (ctx->BeginDragDropTarget()) {
                 float lineY = ctx->GetItemRectMinY();
                 float lineX1 = ctx->GetItemRectMinX();
                 float lineX2 = lineX1 + tailW;
-                ctx->DrawLine(lineX1, lineY, lineX2, lineY,
-                              EditorTheme::DND_REORDER_LINE.x, EditorTheme::DND_REORDER_LINE.y,
-                              EditorTheme::DND_REORDER_LINE.z, EditorTheme::DND_REORDER_LINE.w,
-                              EditorTheme::DND_REORDER_LINE_THICKNESS);
+                ctx->DrawLine(lineX1, lineY, lineX2, lineY, EditorTheme::DND_REORDER_LINE.x,
+                              EditorTheme::DND_REORDER_LINE.y, EditorTheme::DND_REORDER_LINE.z,
+                              EditorTheme::DND_REORDER_LINE.w, EditorTheme::DND_REORDER_LINE_THICKNESS);
                 // Accept uint64_t payload
                 uint64_t payload = 0;
                 bool accepted = false;
-                if (ctx->AcceptDragDropPayload(DRAG_DROP_TYPE, &payload))
-                {
+                if (ctx->AcceptDragDropPayload(DRAG_DROP_TYPE, &payload)) {
                     HandleExternalDrop(DRAG_DROP_TYPE, payload, 0);
                     accepted = true;
                 }
-                if (!accepted)
-                {
-                    for (const char *dt : {"MODEL_GUID", "MODEL_FILE", "PREFAB_GUID", "PREFAB_FILE"})
-                    {
+                if (!accepted) {
+                    for (const char *dt : {"MODEL_GUID", "MODEL_FILE", "PREFAB_GUID", "PREFAB_FILE"}) {
                         std::string strPayload;
-                        if (ctx->AcceptDragDropPayload(dt, &strPayload))
-                        {
+                        if (ctx->AcceptDragDropPayload(dt, &strPayload)) {
                             HandleExternalDropStr(dt, strPayload, 0);
                             break;
                         }
@@ -1465,10 +1301,8 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
 
         // Fallback: deselect when clicking the scrollable background
         // (the tail InvisibleButton only works when remainingH > 4)
-        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
-            && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
-            && !ImGui::IsAnyItemHovered())
-        {
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) {
             CancelRename();
             ClearSelectionAndNotify();
         }
@@ -1481,85 +1315,65 @@ void HierarchyPanel::OnRenderContent(InxGUIContext *ctx)
 
     // ── Parent for new objects ───────────────────────────────────
     uint64_t parentIdForNew = 0;
-    if (isPrefabMode && isPrefabMode())
-    {
+    if (isPrefabMode && isPrefabMode()) {
         Scene *pscene = SceneManager::Instance().GetActiveScene();
         if (pscene && !pscene->GetRootObjects().empty())
             parentIdForNew = pscene->GetRootObjects()[0]->GetID();
-    }
-    else if (m_selCount > 0)
-    {
+    } else if (m_selCount > 0) {
         parentIdForNew = m_selPrimary;
     }
 
     // ── Background context menu ─────────────────────────────────
-    if (ctx->BeginPopupContextWindow("", 1))
-    {
-        if (m_uiMode)
-        {
+    if (ctx->BeginPopupContextWindow("", 1)) {
+        if (m_uiMode) {
             ShowUiModeContextMenu(ctx, parentIdForNew);
-        }
-        else
-        {
-            if (ctx->BeginMenu(Tr("hierarchy.create_3d_object")))
-            {
+        } else {
+            if (ctx->BeginMenu(Tr("hierarchy.create_3d_object"))) {
                 ShowCreatePrimitiveMenu(ctx, parentIdForNew);
                 ctx->EndMenu();
             }
-            if (ctx->BeginMenu(Tr("hierarchy.light_menu")))
-            {
+            if (ctx->BeginMenu(Tr("hierarchy.light_menu"))) {
                 ShowCreateLightMenu(ctx, parentIdForNew);
                 ctx->EndMenu();
             }
-            if (ctx->BeginMenu(Tr("hierarchy.rendering_menu")))
-            {
+            if (ctx->BeginMenu(Tr("hierarchy.rendering_menu"))) {
                 ShowCreateRenderingMenu(ctx, parentIdForNew);
                 ctx->EndMenu();
             }
-            if (ctx->BeginMenu(Tr("hierarchy.ui_menu")))
-            {
+            if (ctx->BeginMenu(Tr("hierarchy.ui_menu"))) {
                 ShowUiMenu(ctx, parentIdForNew);
                 ctx->EndMenu();
             }
-            if (ctx->Selectable(Tr("hierarchy.create_empty"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.create_empty"), false, 0, 0, 0)) {
                 if (createEmpty)
                     createEmpty(parentIdForNew);
             }
         }
 
         bool hasClip = hasClipboardData && hasClipboardData();
-        if (m_selCount > 0 || hasClip)
-        {
+        if (m_selCount > 0 || hasClip) {
             ctx->Separator();
-            if (m_selCount > 0)
-            {
-                if (ctx->Selectable(Tr("project.copy"), false, 0, 0, 0))
-                {
+            if (m_selCount > 0) {
+                if (ctx->Selectable(Tr("project.copy"), false, 0, 0, 0)) {
                     if (copySelected)
                         copySelected(false);
                 }
-                if (ctx->Selectable(Tr("project.cut"), false, 0, 0, 0))
-                {
+                if (ctx->Selectable(Tr("project.cut"), false, 0, 0, 0)) {
                     if (copySelected)
                         copySelected(true);
                 }
             }
-            if (hasClip)
-            {
-                if (ctx->Selectable(Tr("project.paste"), false, 0, 0, 0))
-                {
+            if (hasClip) {
+                if (ctx->Selectable(Tr("project.paste"), false, 0, 0, 0)) {
                     if (pasteClipboard)
                         pasteClipboard();
                 }
             }
         }
 
-        if (m_selCount > 0)
-        {
+        if (m_selCount > 0) {
             ctx->Separator();
-            if (ctx->Selectable(Tr("hierarchy.delete_selected"), false, 0, 0, 0))
-            {
+            if (ctx->Selectable(Tr("hierarchy.delete_selected"), false, 0, 0, 0)) {
                 if (deleteSelectedObjects)
                     deleteSelectedObjects();
                 SyncSelectionCache();

@@ -205,20 +205,35 @@ class InxRenderer
 
     /// @brief Get last frame's game view render time (CPU-side command recording) in ms.
     /// This measures ONLY the game camera render pipeline, excluding editor panels, scene view, etc.
-    [[nodiscard]] double GetLastGameRenderMs() const { return m_lastGameRenderMs; }
+    [[nodiscard]] double GetLastGameRenderMs() const
+    {
+        return m_lastGameRenderMs;
+    }
 
     /// @brief Get game-only frame cost in ms (SceneUpdate + PrepareFrame + GameRender).
     /// Excludes editor panel rendering (Inspector, Hierarchy, Console, etc.).
-    [[nodiscard]] double GetGameOnlyFrameMs() const { return m_gameOnlyFrameMs; }
+    [[nodiscard]] double GetGameOnlyFrameMs() const
+    {
+        return m_gameOnlyFrameMs;
+    }
 
     /// @brief Get SceneManager::Update + LateUpdate time in ms.
-    [[nodiscard]] double GetSceneUpdateMs() const { return m_sceneUpdateMs; }
+    [[nodiscard]] double GetSceneUpdateMs() const
+    {
+        return m_sceneUpdateMs;
+    }
 
     /// @brief Get GUI::BuildFrame time in ms (all ImGui panels).
-    [[nodiscard]] double GetGuiBuildMs() const { return m_guiBuildMs; }
+    [[nodiscard]] double GetGuiBuildMs() const
+    {
+        return m_guiBuildMs;
+    }
 
     /// @brief Get PrepareFrame (collect/cull renderables) time in ms.
-    [[nodiscard]] double GetPrepareFrameMs() const { return m_prepareFrameMs; }
+    [[nodiscard]] double GetPrepareFrameMs() const
+    {
+        return m_prepareFrameMs;
+    }
 
     /// @brief Get the screen UI renderer for GPU-based 2D screen-space UI
     /// @return Pointer to InxScreenUIRenderer, or nullptr if not initialized
@@ -328,7 +343,7 @@ class InxRenderer
     std::unique_ptr<SceneRenderGraph> m_gameRenderGraph;
     std::unique_ptr<InxScreenUIRenderer> m_screenUIRenderer;
     bool m_gameCameraEnabled = false;
-    bool m_sceneViewVisible = true; ///< Set from Python scene_view_panel visibility
+    bool m_sceneViewVisible = true;  ///< Set from Python scene_view_panel visibility
     double m_lastGameRenderMs = 0.0; ///< Per-frame game render time (CPU command recording)
     double m_sceneUpdateMs = 0.0;    ///< SceneManager::Update + LateUpdate (ms)
     double m_guiBuildMs = 0.0;       ///< GUI::BuildFrame (all ImGui panels) (ms)

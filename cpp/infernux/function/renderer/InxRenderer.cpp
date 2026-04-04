@@ -921,12 +921,9 @@ void InxRenderer::DrawFrame()
                 << "ms actualSleep=" << (_pacingAccum.actualSleepMs / kWindow)
                 << "ms slept=" << _pacingAccum.sleptFrames << '/' << static_cast<int>(kWindow)
                 << " idle=" << _pacingAccum.idleFrames << '/' << static_cast<int>(kWindow)
-                << " wakeByEvent=" << _pacingAccum.wokeByEventFrames
-                << " wakeInput=" << _pacingAccum.wokeByInputFrames
-                << " wakeWindow=" << _pacingAccum.wokeByWindowFrames
-                << " wakeOther=" << _pacingAccum.wokeByOtherFrames
-                << " input=" << _pacingAccum.inputFrames
-                << " playBypass=" << _pacingAccum.playBypassFrames;
+                << " wakeByEvent=" << _pacingAccum.wokeByEventFrames << " wakeInput=" << _pacingAccum.wokeByInputFrames
+                << " wakeWindow=" << _pacingAccum.wokeByWindowFrames << " wakeOther=" << _pacingAccum.wokeByOtherFrames
+                << " input=" << _pacingAccum.inputFrames << " playBypass=" << _pacingAccum.playBypassFrames;
 
             oss << "\n  Scene: editorCam=" << (_sceneAccum.editorCameraMs / kWindow)
                 << "ms editor=" << (_sceneAccum.editorUpdateMs / kWindow)
@@ -959,9 +956,8 @@ void InxRenderer::DrawFrame()
             // Inspector sub-timing breakdown
             if (!_inspSubAccum.empty()) {
                 std::vector<std::pair<std::string, double>> inspItems(_inspSubAccum.begin(), _inspSubAccum.end());
-                std::sort(inspItems.begin(), inspItems.end(), [](const auto &lhs, const auto &rhs) {
-                    return lhs.first < rhs.first;
-                });
+                std::sort(inspItems.begin(), inspItems.end(),
+                          [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
                 auto isCountMetric = [](const std::string &key) {
                     constexpr char kSuffix[] = "_count";
                     return key.size() >= (sizeof(kSuffix) - 1) &&

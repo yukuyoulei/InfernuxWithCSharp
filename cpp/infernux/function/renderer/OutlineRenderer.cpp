@@ -780,7 +780,6 @@ void OutlineRenderer::CreateOutlineMaterialResources()
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, ssboBufInfo);
         }
     }
-
 }
 
 VkPipeline OutlineRenderer::GetOrCreateMtlOutlinePipeline(InxMaterial *material)

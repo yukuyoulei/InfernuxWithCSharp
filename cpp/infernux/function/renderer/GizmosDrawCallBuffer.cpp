@@ -292,7 +292,8 @@ DrawCallResult GizmosDrawCallBuffer::GetIconDrawCalls(std::shared_ptr<InxMateria
             // INXLOG_INFO("GizmoIcons: entry[", i, "] kind=", kindName, " objectId=", icon.objectId,
             //             " pos=", icon.position.x, ",", icon.position.y, ",", icon.position.z,
             //             " distance=", (i < iconDistances.size() ? iconDistances[i] : -1.0f),
-            //             " material=", (i < iconMaterialNames.size() ? iconMaterialNames[i] : std::string("<missing>")));
+            //             " material=", (i < iconMaterialNames.size() ? iconMaterialNames[i] :
+            //             std::string("<missing>")));
         }
         s_lastIconEntryCount = m_iconEntries.size();
         s_lastBuiltIconDrawCallCount = result.drawCalls.size();

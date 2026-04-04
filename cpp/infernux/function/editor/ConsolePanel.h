@@ -87,7 +87,7 @@ class ConsolePanel : public EditorPanel
     static constexpr size_t MAX_LOGS = 2000;
     std::deque<LogEntry> m_logs;
     uint64_t m_nextUid = 1;
-    mutable std::mutex m_logMutex; // protects m_logs + m_pendingLogs
+    mutable std::mutex m_logMutex;       // protects m_logs + m_pendingLogs
     std::vector<LogEntry> m_pendingLogs; // accumulated off-main-thread, flushed in OnRender
 
     // ── Filter cache ──

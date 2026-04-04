@@ -40,7 +40,6 @@ void MaterialPipelineManager::Initialize(VmaAllocator allocator, VkDevice device
         INXLOG_WARN("Failed to create VkPipelineCache, pipeline recreation may be slower");
         m_vkPipelineCache = VK_NULL_HANDLE;
     }
-
 }
 
 void MaterialPipelineManager::Shutdown(bool skipWaitIdle)

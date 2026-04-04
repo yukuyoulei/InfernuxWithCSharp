@@ -527,7 +527,6 @@ void InxVkCoreModular::ReinitializeMaterialPipelines(VkSampleCountFlagBits newSa
     // Preview render targets cache a render pass / framebuffer that must stay
     // compatible with the material pipelines' MSAA sample count.
     m_gpuMaterialPreview.reset();
-
 }
 
 bool InxVkCoreModular::RefreshMaterialPipeline(std::shared_ptr<InxMaterial> material, const std::string &vertShaderName,

@@ -30,7 +30,10 @@ class HierarchyPanel : public EditorPanel
     // ── Public API (called from Python bootstrap / other panels) ─────
 
     void SetUiMode(bool enabled);
-    [[nodiscard]] bool GetUiMode() const { return m_uiMode; }
+    [[nodiscard]] bool GetUiMode() const
+    {
+        return m_uiMode;
+    }
 
     void ClearSearch();
     void ClearSelectionAndNotify();
@@ -38,7 +41,10 @@ class HierarchyPanel : public EditorPanel
     void ExpandToObject(uint64_t objId);
 
     /// Allow external panels (UIEditorPanel) to queue an auto-expand.
-    void SetPendingExpandId(uint64_t id) { m_pendingExpandId = id; }
+    void SetPendingExpandId(uint64_t id)
+    {
+        m_pendingExpandId = id;
+    }
 
     // ── Selection callbacks (wrap Python SelectionManager) ───────────
 
@@ -88,8 +94,8 @@ class HierarchyPanel : public EditorPanel
 
     // ── Context-menu action callbacks ────────────────────────────────
 
-    std::function<void(int, uint64_t)> createPrimitive;   // (typeIdx, parentId)
-    std::function<void(int, uint64_t)> createLight;        // (typeIdx, parentId)
+    std::function<void(int, uint64_t)> createPrimitive; // (typeIdx, parentId)
+    std::function<void(int, uint64_t)> createLight;     // (typeIdx, parentId)
     std::function<void(uint64_t)> createCamera;
     std::function<void(uint64_t)> createRenderStack;
     std::function<void(uint64_t)> createEmpty;
@@ -105,7 +111,7 @@ class HierarchyPanel : public EditorPanel
 
     // ── Clipboard callbacks ──────────────────────────────────────────
 
-    std::function<bool(bool)> copySelected;   // (cut) → success
+    std::function<bool(bool)> copySelected; // (cut) → success
     std::function<bool()> pasteClipboard;
     std::function<bool()> hasClipboardData;
 
@@ -203,7 +209,10 @@ class HierarchyPanel : public EditorPanel
 
     // Search
     void SetSearchQuery(const char *text);
-    [[nodiscard]] bool HasActiveSearch() const { return !m_searchQueryNorm.empty(); }
+    [[nodiscard]] bool HasActiveSearch() const
+    {
+        return !m_searchQueryNorm.empty();
+    }
     [[nodiscard]] bool MatchesSearch(GameObject *obj) const;
     bool IsVisibleInSearch(GameObject *obj);
     std::vector<GameObject *> FilterForSearch(const std::vector<GameObject *> &objects);
@@ -215,8 +224,7 @@ class HierarchyPanel : public EditorPanel
     // Tree rendering
     void RenderGameObjectTree(InxGUIContext *ctx, GameObject *obj);
     void RenderRenameInput(InxGUIContext *ctx, GameObject *obj);
-    void RenderReorderSep(InxGUIContext *ctx, const char *sepId,
-                          std::function<void(uint64_t)> onDrop);
+    void RenderReorderSep(InxGUIContext *ctx, const char *sepId, std::function<void(uint64_t)> onDrop);
     void RenderMultiDropTarget(InxGUIContext *ctx, uint64_t parentId);
 
     // Selection

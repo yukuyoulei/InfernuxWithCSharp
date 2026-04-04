@@ -82,8 +82,7 @@ void StatusBarPanel::OnRender(InxGUIContext *ctx)
                                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
                                        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
 
-    if (ImGui::Begin("##InxStatusBar", nullptr, flags))
-    {
+    if (ImGui::Begin("##InxStatusBar", nullptr, flags)) {
         RenderContent(ctx, dispW);
     }
     ImGui::End();
@@ -110,8 +109,7 @@ void StatusBarPanel::RenderContent(InxGUIContext *ctx, float dispW)
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::BTN_SB_HOVERED);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::BTN_SB_ACTIVE);
 
-    if (ImGui::InvisibleButton("##StatusBarClick", ImVec2(clickW, barH)))
-    {
+    if (ImGui::InvisibleButton("##StatusBarClick", ImVec2(clickW, barH))) {
         if (m_console)
             m_console->SelectLatestEntry();
     }
@@ -133,8 +131,7 @@ void StatusBarPanel::RenderContent(InxGUIContext *ctx, float dispW)
     // Truncate
     std::string msg = m_latestMsg;
     int maxChars = (std::max)(10, static_cast<int>((leftZoneW - 160.0f) / 8.0f));
-    if (static_cast<int>(msg.size()) > maxChars)
-    {
+    if (static_cast<int>(msg.size()) > maxChars) {
         msg = msg.substr(0, maxChars - 1) + "\xe2\x80\xa6"; // …
     }
 
@@ -143,8 +140,7 @@ void StatusBarPanel::RenderContent(InxGUIContext *ctx, float dispW)
 
     // ── Right counters: [W] N  [E] N ────────────────────────────
     float counterX = leftZoneW - 130.0f;
-    if (counterX > 0.0f)
-    {
+    if (counterX > 0.0f) {
         ImGui::SameLine(counterX);
 
         // Warn count
@@ -173,21 +169,19 @@ void StatusBarPanel::RenderContent(InxGUIContext *ctx, float dispW)
     }
 
     // ── Right zone: engine status + progress ─────────────────────
-    if (statusActive)
-    {
+    if (statusActive) {
         RenderEngineStatus(ctx, dispW, leftZoneW, m_statusText, m_statusProgress);
     }
 }
 
-void StatusBarPanel::RenderEngineStatus(InxGUIContext *ctx, float dispW, float leftZoneW,
-                                        const std::string &text, float progress)
+void StatusBarPanel::RenderEngineStatus(InxGUIContext *ctx, float dispW, float leftZoneW, const std::string &text,
+                                        float progress)
 {
     ImGui::SameLine(leftZoneW + 8.0f);
     float zoneW = dispW - leftZoneW - 16.0f;
 
     // Determinate progress bar
-    if (progress >= 0.0f)
-    {
+    if (progress >= 0.0f) {
         float barW = (std::min)(zoneW * 0.4f, 80.0f);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::STATUS_PROGRESS_BG);
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, EditorTheme::STATUS_PROGRESS_CLR);
@@ -202,8 +196,7 @@ void StatusBarPanel::RenderEngineStatus(InxGUIContext *ctx, float dispW, float l
     float remainingW = zoneW - (progress >= 0.0f ? 90.0f : 0.0f);
     int maxChars = (std::max)(6, static_cast<int>(remainingW / 8.0f));
     std::string label = text;
-    if (static_cast<int>(label.size()) > maxChars)
-    {
+    if (static_cast<int>(label.size()) > maxChars) {
         label = label.substr(0, maxChars - 1) + "\xe2\x80\xa6"; // …
     }
 

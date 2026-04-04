@@ -33,9 +33,9 @@ struct PropertyDesc
     std::string widgetId;
     std::string label;
     float fVal[4] = {0, 0, 0, 0}; // Float or vector x/y/z/w
-    int iVal = 0;                  // Int or enum index
-    bool bVal = false;             // Bool
-    std::string sVal;              // String value
+    int iVal = 0;                 // Int or enum index
+    bool bVal = false;            // Bool
+    std::string sVal;             // String value
     float rangeMin = -1e6f;
     float rangeMax = 1e6f;
     float speed = 0.1f;

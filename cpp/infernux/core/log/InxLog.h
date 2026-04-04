@@ -86,9 +86,9 @@ class InxLog
     void RemoveSink(size_t sinkId)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        sinks_.erase(std::remove_if(sinks_.begin(), sinks_.end(),
-                                    [sinkId](const SinkEntry &e) { return e.id == sinkId; }),
-                     sinks_.end());
+        sinks_.erase(
+            std::remove_if(sinks_.begin(), sinks_.end(), [sinkId](const SinkEntry &e) { return e.id == sinkId; }),
+            sinks_.end());
     }
 
     template <typename... Args> void Log(LogLevel level, const char *file, int line, Args &&...args)
@@ -102,7 +102,8 @@ class InxLog
     }
 
   private:
-    template <typename... Args> void LogImpl(LogLevel level, const char *file, int line, bool internalOnly, Args &&...args)
+    template <typename... Args>
+    void LogImpl(LogLevel level, const char *file, int line, bool internalOnly, Args &&...args)
     {
         if (logLevel.load(std::memory_order_relaxed) > level)
             return;

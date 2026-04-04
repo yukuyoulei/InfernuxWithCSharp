@@ -77,8 +77,8 @@ void RenderGraph::CullPasses()
     // the output and will not execute.
     for (uint32_t i = 0; i < m_passes.size(); i++) {
         if (m_passes[i].culled) {
-            INXLOG_WARN("RenderGraph::CullPasses - Pass '", m_passes[i].name,
-                        "' (index ", i, ") was culled (no path to output). "
+            INXLOG_WARN("RenderGraph::CullPasses - Pass '", m_passes[i].name, "' (index ", i,
+                        ") was culled (no path to output). "
                         "Check that downstream passes read this pass's outputs.");
         }
     }

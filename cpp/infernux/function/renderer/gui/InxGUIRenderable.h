@@ -18,6 +18,9 @@ class InxGUIRenderable
     }
 
     /// Optional sub-timing breakdown (accumulated ms, reset by caller).
-    virtual std::unordered_map<std::string, double> ConsumeSubTimings() { return {}; }
+    virtual std::unordered_map<std::string, double> ConsumeSubTimings()
+    {
+        return {};
+    }
 };
 } // namespace infernux

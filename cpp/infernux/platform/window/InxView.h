@@ -19,10 +19,10 @@ namespace infernux
 /// An editor FPS cap also limits the maximum frame rate in edit mode.
 struct FpsIdling
 {
-    float fpsIdle = 10.0f;          ///< Target FPS when idling (0 = disable idle)
-    float editorFpsCap = 144.0f;     ///< Max FPS in editor mode (0 = uncapped)
-    bool enableIdling = true;       ///< Master switch for idle detection
-    bool isIdling = false;          ///< Output — true when the last frame went idle
+    float fpsIdle = 10.0f;       ///< Target FPS when idling (0 = disable idle)
+    float editorFpsCap = 144.0f; ///< Max FPS in editor mode (0 = uncapped)
+    bool enableIdling = true;    ///< Master switch for idle detection
+    bool isIdling = false;       ///< Output — true when the last frame went idle
 };
 
 /// Per-frame pacing diagnostics for editor FPS cap / idle mode.

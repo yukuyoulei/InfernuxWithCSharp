@@ -1084,24 +1084,24 @@ void SceneRenderGraph::BuildRenderGraph()
                         std::string resolvePassName =
                             "__MSAA_resolve_pre_fs_" + std::to_string(msaaResolvePassCounter++);
 
-                        m_renderGraph->AddTransferPass(
-                            resolvePassName, [importedColor, importedResolve, resolveW, resolveH, msaaImage,
-                                              resolveImage](vk::PassBuilder &builder) {
-                                builder.TransferRead(importedColor);
-                                builder.TransferWrite(importedResolve);
-                                builder.SetRenderArea(resolveW, resolveH);
+                        m_renderGraph->AddTransferPass(resolvePassName, [importedColor, importedResolve, resolveW,
+                                                                         resolveH, msaaImage,
+                                                                         resolveImage](vk::PassBuilder &builder) {
+                            builder.TransferRead(importedColor);
+                            builder.TransferWrite(importedResolve);
+                            builder.SetRenderArea(resolveW, resolveH);
 
-                                return [msaaImage, resolveImage, resolveW, resolveH](vk::RenderContext &ctx) {
-                                    VkImageResolve region{};
-                                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                                    region.extent = {resolveW, resolveH, 1};
+                            return [msaaImage, resolveImage, resolveW, resolveH](vk::RenderContext &ctx) {
+                                VkImageResolve region{};
+                                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                                region.extent = {resolveW, resolveH, 1};
 
-                                    vkCmdResolveImage(ctx.GetCommandBuffer(), msaaImage,
-                                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resolveImage,
-                                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-                                };
-                            });
+                                vkCmdResolveImage(ctx.GetCommandBuffer(), msaaImage,
+                                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resolveImage,
+                                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                            };
+                        });
                         backbufferDirtySinceResolve = false;
                     }
                 }
@@ -1560,10 +1560,11 @@ void SceneRenderGraph::BuildRenderGraph()
     }
 
     // Debug: Log the passes added to the render graph
-    INXLOG_DEBUG("SceneRenderGraph::BuildRenderGraph - Built ",
-                 m_renderGraph->GetPassCount(), " passes from ",
-                 m_pythonGraphDesc.passes.size(), " Python passes + editor auto-appended passes. "
-                 "Output: ", m_pythonGraphDesc.outputTexture.empty() ? "(backbuffer)" : m_pythonGraphDesc.outputTexture);
+    INXLOG_DEBUG("SceneRenderGraph::BuildRenderGraph - Built ", m_renderGraph->GetPassCount(), " passes from ",
+                 m_pythonGraphDesc.passes.size(),
+                 " Python passes + editor auto-appended passes. "
+                 "Output: ",
+                 m_pythonGraphDesc.outputTexture.empty() ? "(backbuffer)" : m_pythonGraphDesc.outputTexture);
 
     m_graphBuilt = true;
 }

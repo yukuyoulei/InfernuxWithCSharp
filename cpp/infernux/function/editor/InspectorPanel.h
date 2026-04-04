@@ -21,10 +21,10 @@ struct ComponentInfo
     uint64_t componentId = 0;
     bool enabled = true;
     bool isNative = true;
-    bool isScript = false;  // Python script (show "(Script)" suffix)
-    bool isBroken = false;  // Script has load errors
+    bool isScript = false; // Python script (show "(Script)" suffix)
+    bool isBroken = false; // Script has load errors
     std::string brokenError;
-    uint64_t iconId = 0;    // Pre-resolved texture ID for component icon
+    uint64_t iconId = 0; // Pre-resolved texture ID for component icon
 };
 
 /// Inspector display mode — mutually exclusive.
@@ -51,11 +51,17 @@ class InspectorPanel : public EditorPanel
 
     void SetSelectedObjectId(uint64_t id);
     void ClearSelectedObject();
-    [[nodiscard]] uint64_t GetSelectedObjectId() const { return m_selectedObjectId; }
+    [[nodiscard]] uint64_t GetSelectedObjectId() const
+    {
+        return m_selectedObjectId;
+    }
 
     void SetSelectedFile(const std::string &filePath, const std::string &category);
     void ClearSelectedFile();
-    [[nodiscard]] const std::string &GetSelectedFile() const { return m_selectedFile; }
+    [[nodiscard]] const std::string &GetSelectedFile() const
+    {
+        return m_selectedFile;
+    }
 
     void SetDetailFile(const std::string &filePath, const std::string &category);
 
@@ -127,7 +133,8 @@ class InspectorPanel : public EditorPanel
         std::string scriptPath; // only for scripts
     };
     std::function<std::vector<AddComponentEntry>()> getAddComponentEntries;
-    std::function<void(const std::string &, bool, const std::string &)> addComponent; // (typeName/path, isNative, scriptPath)
+    std::function<void(const std::string &, bool, const std::string &)>
+        addComponent; // (typeName/path, isNative, scriptPath)
 
     // ── Remove Component callback ────────────────────────────────────
 
@@ -251,11 +258,10 @@ class InspectorPanel : public EditorPanel
 
     /// Render one component header (icon + enabled + collapsing).
     /// Returns (headerOpen, newEnabled).
-    std::pair<bool, bool> RenderComponentHeader(
-        InxGUIContext *ctx, const std::string &typeName,
-        const std::string &headerId, uint64_t iconId,
-        bool showEnabled, bool isEnabled,
-        const std::string &suffix = "", bool defaultOpen = true);
+    std::pair<bool, bool> RenderComponentHeader(InxGUIContext *ctx, const std::string &typeName,
+                                                const std::string &headerId, uint64_t iconId, bool showEnabled,
+                                                bool isEnabled, const std::string &suffix = "",
+                                                bool defaultOpen = true);
 
     bool RenderInspectorCheckbox(InxGUIContext *ctx, const char *label, bool value);
 
@@ -271,8 +277,8 @@ class InspectorPanel : public EditorPanel
         bool needsFocus = false;
     };
     std::unordered_map<std::string, ComboState> m_comboStates;
-    int SearchableCombo(InxGUIContext *ctx, const char *label, int currentIdx,
-                        const std::vector<std::string> &items, float width = 0.0f);
+    int SearchableCombo(InxGUIContext *ctx, const char *label, int currentIdx, const std::vector<std::string> &items,
+                        float width = 0.0f);
 };
 
 } // namespace infernux

@@ -31,8 +31,7 @@ void MenuBarPanel::OnRender(InxGUIContext *ctx)
     HandleShortcuts(ctx);
 
     // Check for window close request (SDL_EVENT_QUIT intercepted by C++)
-    if (isCloseRequested && onRequestClose)
-    {
+    if (isCloseRequested && onRequestClose) {
         if (isCloseRequested())
             onRequestClose();
     }
@@ -46,8 +45,7 @@ void MenuBarPanel::OnRender(InxGUIContext *ctx)
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::HEADER_HOVERED);
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::HEADER_ACTIVE);
 
-    if (ImGui::BeginMainMenuBar())
-    {
+    if (ImGui::BeginMainMenuBar()) {
         RenderProjectMenu(ctx);
         RenderWindowMenu(ctx);
         ImGui::EndMainMenuBar();
@@ -76,14 +74,12 @@ void MenuBarPanel::HandleShortcuts(InxGUIContext *ctx)
     if (ctx->IsKeyPressed(KEY_N) && onNewScene)
         onNewScene();
 
-    if (ctx->IsKeyPressed(KEY_Z))
-    {
+    if (ctx->IsKeyPressed(KEY_Z)) {
         if (canUndo && canUndo() && onUndo)
             onUndo();
     }
 
-    if (ctx->IsKeyPressed(KEY_Y))
-    {
+    if (ctx->IsKeyPressed(KEY_Y)) {
         if (canRedo && canRedo() && onRedo)
             onRedo();
     }
@@ -100,16 +96,14 @@ void MenuBarPanel::RenderProjectMenu(InxGUIContext *ctx)
 
     // Build Settings toggle
     bool bsOpen = isBuildSettingsOpen ? isBuildSettingsOpen() : false;
-    if (ImGui::MenuItem(T("menu.build_settings").c_str(), "", bsOpen, true))
-    {
+    if (ImGui::MenuItem(T("menu.build_settings").c_str(), "", bsOpen, true)) {
         if (toggleBuildSettings)
             toggleBuildSettings();
     }
 
     // Physics Layer Matrix toggle
     bool plOpen = isPhysicsLayerMatrixOpen ? isPhysicsLayerMatrixOpen() : false;
-    if (ImGui::MenuItem(T("menu.physics_layer_matrix").c_str(), "", plOpen, true))
-    {
+    if (ImGui::MenuItem(T("menu.physics_layer_matrix").c_str(), "", plOpen, true)) {
         if (togglePhysicsLayerMatrix)
             togglePhysicsLayerMatrix();
     }
@@ -118,8 +112,7 @@ void MenuBarPanel::RenderProjectMenu(InxGUIContext *ctx)
 
     // Preferences toggle
     bool prefOpen = isPreferencesOpen ? isPreferencesOpen() : false;
-    if (ImGui::MenuItem(T("menu.preferences").c_str(), "", prefOpen, true))
-    {
+    if (ImGui::MenuItem(T("menu.preferences").c_str(), "", prefOpen, true)) {
         if (togglePreferences)
             togglePreferences();
     }
@@ -136,15 +129,12 @@ void MenuBarPanel::RenderWindowMenu(InxGUIContext *ctx)
     if (!ImGui::BeginMenu(T("menu.window").c_str()))
         return;
 
-    if (getRegisteredTypes && getOpenWindows)
-    {
+    if (getRegisteredTypes && getOpenWindows) {
         auto types = getRegisteredTypes();
         auto openWins = getOpenWindows();
 
-        if (!types.empty())
-        {
-            for (const auto &info : types)
-            {
+        if (!types.empty()) {
+            for (const auto &info : types) {
                 bool isOpen = false;
                 auto it = openWins.find(info.typeId);
                 if (it != openWins.end())
@@ -152,35 +142,26 @@ void MenuBarPanel::RenderWindowMenu(InxGUIContext *ctx)
 
                 bool canCreate = !(info.singleton && isOpen);
 
-                if (ImGui::MenuItem(info.displayName.c_str(), "", isOpen, canCreate))
-                {
-                    if (isOpen)
-                    {
+                if (ImGui::MenuItem(info.displayName.c_str(), "", isOpen, canCreate)) {
+                    if (isOpen) {
                         if (closeWindow)
                             closeWindow(info.typeId);
-                    }
-                    else
-                    {
+                    } else {
                         if (openWindow)
                             openWindow(info.typeId);
                     }
                 }
             }
-        }
-        else
-        {
+        } else {
             ImGui::MenuItem(T("menu.no_windows").c_str(), "", false, false);
         }
-    }
-    else
-    {
+    } else {
         ImGui::MenuItem(T("menu.no_wm").c_str(), "", false, false);
     }
 
     ImGui::Separator();
 
-    if (ImGui::MenuItem(T("menu.reset_layout").c_str(), "", false, true))
-    {
+    if (ImGui::MenuItem(T("menu.reset_layout").c_str(), "", false, true)) {
         if (resetLayout)
             resetLayout();
     }

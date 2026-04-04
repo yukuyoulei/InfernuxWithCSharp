@@ -89,9 +89,9 @@ constexpr ImVec2 STATUS_BAR_FRAME_PAD{0.0f, 0.0f};
 constexpr float STATUS_BAR_BASE_HEIGHT = 24.0f;
 
 // ── Hierarchy / Tree ─────────────────────────────────────────────────
-constexpr ImVec2 TREE_ITEM_SPC{0.0f, 0.0f};   // ItemSpacing (Unity: 0)
-constexpr ImVec2 TREE_FRAME_PAD{2.0f, 2.0f};  // FramePadding (Unity-compact)
-constexpr float TREE_INDENT = 14.0f;           // IndentSpacing per level
+constexpr ImVec2 TREE_ITEM_SPC{0.0f, 0.0f};  // ItemSpacing (Unity: 0)
+constexpr ImVec2 TREE_FRAME_PAD{2.0f, 2.0f}; // FramePadding (Unity-compact)
+constexpr float TREE_INDENT = 14.0f;         // IndentSpacing per level
 constexpr ImVec4 PREFAB_TEXT{235.0f / 255.0f, 87.0f / 255.0f, 87.0f / 255.0f, 1.0f};
 constexpr ImVec4 TEXT_DISABLED{0.40f, 0.40f, 0.40f, 1.0f};
 constexpr ImVec4 DND_REORDER_LINE{1.0f, 1.0f, 1.0f, 0.90f};

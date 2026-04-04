@@ -876,25 +876,27 @@ void RenderGraph::Execute(VkCommandBuffer commandBuffer)
             std::string clearInfo = "no-clear";
             if (pass.clearColorEnabled) {
                 auto &cv = pass.clearColor;
-                clearInfo = "clear=(" + std::to_string(cv.float32[0]) + "," + std::to_string(cv.float32[1]) +
-                            "," + std::to_string(cv.float32[2]) + "," + std::to_string(cv.float32[3]) + ")";
+                clearInfo = "clear=(" + std::to_string(cv.float32[0]) + "," + std::to_string(cv.float32[1]) + "," +
+                            std::to_string(cv.float32[2]) + "," + std::to_string(cv.float32[3]) + ")";
             }
             std::string writeInfo;
             for (const auto &w : pass.writes) {
-                if (!writeInfo.empty()) writeInfo += ",";
+                if (!writeInfo.empty())
+                    writeInfo += ",";
                 if (w.handle.id < m_resources.size()) {
                     writeInfo += m_resources[w.handle.id].name + "(id=" + std::to_string(w.handle.id) + ")";
                 }
             }
             std::string readInfo;
             for (const auto &r : pass.reads) {
-                if (!readInfo.empty()) readInfo += ",";
+                if (!readInfo.empty())
+                    readInfo += ",";
                 if (r.handle.id < m_resources.size()) {
                     readInfo += m_resources[r.handle.id].name + "(id=" + std::to_string(r.handle.id) + ")";
                 }
             }
-            INXLOG_DEBUG("RenderGraph::Execute pass[", passIndex, "] '", pass.name,
-                         "' writes=[", writeInfo, "] reads=[", readInfo, "] ", clearInfo);
+            INXLOG_DEBUG("RenderGraph::Execute pass[", passIndex, "] '", pass.name, "' writes=[", writeInfo,
+                         "] reads=[", readInfo, "] ", clearInfo);
         }
 #if INFERNUX_FRAME_PROFILE
         auto stageNow = Clock::now();
@@ -925,11 +927,9 @@ void RenderGraph::Execute(VkCommandBuffer commandBuffer)
             try {
                 pass.executeCallback(context);
             } catch (const std::exception &e) {
-                INXLOG_ERROR("RenderGraph::Execute - Pass '", pass.name,
-                             "' callback threw exception: ", e.what());
+                INXLOG_ERROR("RenderGraph::Execute - Pass '", pass.name, "' callback threw exception: ", e.what());
             } catch (...) {
-                INXLOG_ERROR("RenderGraph::Execute - Pass '", pass.name,
-                             "' callback threw unknown exception");
+                INXLOG_ERROR("RenderGraph::Execute - Pass '", pass.name, "' callback threw unknown exception");
             }
 #if INFERNUX_FRAME_PROFILE
             stageNow = Clock::now();

@@ -31,7 +31,8 @@ ConsolePanel::~ConsolePanel()
 // INXLOG sink callback (may be called from ANY thread)
 // ════════════════════════════════════════════════════════════════════
 
-void ConsolePanel::OnLogMessage(LogLevel level, const char *file, int line, const std::string &message, bool internalOnly)
+void ConsolePanel::OnLogMessage(LogLevel level, const char *file, int line, const std::string &message,
+                                bool internalOnly)
 {
     if (internalOnly || IsInternalNoise(message))
         return;
@@ -152,8 +153,7 @@ void ConsolePanel::FlushPendingLogs()
         incoming.swap(m_pendingLogs);
     }
 
-    for (auto &entry : incoming)
-    {
+    for (auto &entry : incoming) {
         entry.uid = m_nextUid++;
         m_logs.push_back(std::move(entry));
     }
@@ -173,8 +173,7 @@ void ConsolePanel::GetCountSnapshot(int &infoCount, int &warnCount, int &errorCo
     errorCount = 0;
 
     auto accumulate = [&infoCount, &warnCount, &errorCount](LogLevel level) {
-        switch (level)
-        {
+        switch (level) {
         case LOG_WARN:
             ++warnCount;
             break;
@@ -203,8 +202,7 @@ void ConsolePanel::DetectFilterChange()
 {
     bool changed = (showInfo != m_prevShowInfo || showWarnings != m_prevShowWarnings ||
                     showErrors != m_prevShowErrors || collapse != m_prevCollapse);
-    if (changed)
-    {
+    if (changed) {
         m_prevShowInfo = showInfo;
         m_prevShowWarnings = showWarnings;
         m_prevShowErrors = showErrors;
@@ -236,8 +234,7 @@ void ConsolePanel::EnsureCache()
     // collapse_map: key = (level, message) → index in m_visible
     std::unordered_map<std::string, size_t> collapseMap;
 
-    for (size_t i = 0; i < m_logs.size(); ++i)
-    {
+    for (size_t i = 0; i < m_logs.size(); ++i) {
         const auto &log = m_logs[i];
 
         // Apply filters
@@ -248,13 +245,11 @@ void ConsolePanel::EnsureCache()
         if ((log.level == LOG_ERROR || log.level == LOG_FATAL) && !showErrors)
             continue;
 
-        if (collapse)
-        {
+        if (collapse) {
             // Build collapse key: level + message
             std::string key = std::to_string(static_cast<int>(log.level)) + "|" + log.message;
             auto it = collapseMap.find(key);
-            if (it != collapseMap.end())
-            {
+            if (it != collapseMap.end()) {
                 m_visible[it->second].count++;
                 m_visible[it->second].uid = log.uid;
                 continue;
@@ -270,13 +265,10 @@ void ConsolePanel::EnsureCache()
     }
 
     // Restore selection by UID — prevents click/refresh race
-    if (selectedUid > 0)
-    {
+    if (selectedUid > 0) {
         m_selectedIndex = -1;
-        for (int idx = 0; idx < static_cast<int>(m_visible.size()); ++idx)
-        {
-            if (m_visible[idx].uid == selectedUid)
-            {
+        for (int idx = 0; idx < static_cast<int>(m_visible.size()); ++idx) {
+            if (m_visible[idx].uid == selectedUid) {
                 m_selectedIndex = idx;
                 break;
             }
@@ -368,34 +360,27 @@ void ConsolePanel::RenderBody(InxGUIContext * /*ctx*/)
     float availH = ImGui::GetContentRegionAvail().y;
 
     // Sentinel -2: "select last visible entry" (from SelectLatestEntry)
-    if (m_selectedIndex == -2 && !m_visible.empty())
-    {
+    if (m_selectedIndex == -2 && !m_visible.empty()) {
         m_selectedIndex = static_cast<int>(m_visible.size()) - 1;
         m_scrollToBottom = true;
-    }
-    else if (m_selectedIndex == -2)
-    {
+    } else if (m_selectedIndex == -2) {
         m_selectedIndex = -1;
     }
 
     bool hasDetail = (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visible.size()));
 
     // Clamp selection
-    if (m_selectedIndex >= static_cast<int>(m_visible.size()))
-    {
+    if (m_selectedIndex >= static_cast<int>(m_visible.size())) {
         m_selectedIndex = -1;
         hasDetail = false;
     }
 
     float splitterH = 3.0f;
     float listH;
-    if (hasDetail)
-    {
+    if (hasDetail) {
         m_detailHeight = (std::max)(40.0f, (std::min)(m_detailHeight, availH - 60.0f));
         listH = (std::max)(availH - m_detailHeight - splitterH, 40.0f);
-    }
-    else
-    {
+    } else {
         listH = 0.0f; // 0 = use remaining space
     }
 
@@ -404,55 +389,45 @@ void ConsolePanel::RenderBody(InxGUIContext * /*ctx*/)
 
     // ── Log list (virtual-scrolled) ──
     ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::BORDER_TRANSPARENT);
-    if (ImGui::BeginChild("##ConsoleLogList", ImVec2(0, listH), ImGuiChildFlags_Borders))
-    {
+    if (ImGui::BeginChild("##ConsoleLogList", ImVec2(0, listH), ImGuiChildFlags_Borders)) {
         float scrollY = ImGui::GetScrollY();
         float viewportH = ImGui::GetContentRegionAvail().y;
         int firstVis = (rowH > 0.0f) ? (std::max)(static_cast<int>(scrollY / rowH), 0) : 0;
         int lastVis = (total > 0) ? (std::min)(firstVis + static_cast<int>(viewportH / rowH) + 2, total - 1) : -1;
 
         // Top spacer
-        if (firstVis > 0)
-        {
+        if (firstVis > 0) {
             float w = ImGui::GetContentRegionAvail().x;
             ImGui::Dummy(ImVec2(w, firstVis * rowH));
         }
 
         // Render visible rows
-        for (int idx = (std::max)(firstVis, 0); idx <= lastVis; ++idx)
-        {
-            if (!m_rowHeightMeasured)
-            {
+        for (int idx = (std::max)(firstVis, 0); idx <= lastVis; ++idx) {
+            if (!m_rowHeightMeasured) {
                 float y0 = ImGui::GetCursorPosY();
                 RenderRow(idx, m_visible[idx]);
                 float y1 = ImGui::GetCursorPosY();
                 float measured = y1 - y0;
-                if (measured > 1.0f)
-                {
+                if (measured > 1.0f) {
                     m_rowHeight = measured;
                     rowH = measured;
                     m_rowHeightMeasured = true;
                 }
-            }
-            else
-            {
+            } else {
                 RenderRow(idx, m_visible[idx]);
             }
         }
 
         // Bottom spacer
         int remaining = total - (lastVis + 1);
-        if (remaining > 0)
-        {
+        if (remaining > 0) {
             float w = ImGui::GetContentRegionAvail().x;
             ImGui::Dummy(ImVec2(w, remaining * rowH));
         }
 
         // Ctrl+C: copy selected entry
-        if (m_selectedIndex >= 0 && m_selectedIndex < total)
-        {
-            if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C))
-            {
+        if (m_selectedIndex >= 0 && m_selectedIndex < total) {
+            if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
                 const auto &ve = m_visible[m_selectedIndex];
                 const auto &log = m_logs[ve.logIndex];
                 std::string copyText = log.message;
@@ -465,14 +440,12 @@ void ConsolePanel::RenderBody(InxGUIContext * /*ctx*/)
         // Smart auto-scroll
         scrollY = ImGui::GetScrollY();
         float scrollMax = ImGui::GetScrollMaxY();
-        if (scrollMax > 0)
-        {
+        if (scrollMax > 0) {
             bool atBottom = (scrollMax - scrollY) < 20.0f;
             m_userScrolledUp = !atBottom;
         }
 
-        if (m_scrollToBottom && !m_visible.empty())
-        {
+        if (m_scrollToBottom && !m_visible.empty()) {
             ImGui::SetScrollHereY(1.0f);
             m_scrollToBottom = false;
         }
@@ -481,33 +454,27 @@ void ConsolePanel::RenderBody(InxGUIContext * /*ctx*/)
     ImGui::PopStyleColor(); // Border
 
     // ── Draggable splitter ──
-    if (hasDetail)
-    {
+    if (hasDetail) {
         float availW = ImGui::GetContentRegionAvail().x;
         ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::BTN_GHOST);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::SPLITTER_HOVER);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::SPLITTER_ACTIVE);
         ImGui::InvisibleButton("##ConsoleSplitter", ImVec2(availW, splitterH));
-        if (ImGui::IsItemActive())
-        {
+        if (ImGui::IsItemActive()) {
             float dy = ImGui::GetMouseDragDelta(0).y;
-            if (std::abs(dy) > 0.5f)
-            {
+            if (std::abs(dy) > 0.5f) {
                 m_detailHeight = (std::max)(40.0f, m_detailHeight - dy);
                 ImGui::ResetMouseDragDelta(0);
             }
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        }
-        else if (ImGui::IsItemHovered())
-        {
+        } else if (ImGui::IsItemHovered()) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
         }
         ImGui::PopStyleColor(3);
     }
 
     // ── Detail pane ──
-    if (hasDetail && m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visible.size()))
-    {
+    if (hasDetail && m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_visible.size())) {
         const auto &ve = m_visible[m_selectedIndex];
         const auto &log = m_logs[ve.logIndex];
         const ImVec4 &clr = LevelColor(log.level);
@@ -522,8 +489,8 @@ void ConsolePanel::RenderBody(InxGUIContext * /*ctx*/)
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
         // Read-only multiline input — supports text selection & Ctrl+C
-        ImGui::InputTextMultiline("##ConsoleDetail", const_cast<char *>(detailText.c_str()),
-                                  detailText.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
+        ImGui::InputTextMultiline("##ConsoleDetail", const_cast<char *>(detailText.c_str()), detailText.size() + 1,
+                                  ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
 
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
@@ -554,23 +521,19 @@ void ConsolePanel::RenderRow(int visIdx, const VisibleEntry &ve)
 
     // Unique ID to avoid ImGui ID conflicts
     char label[512];
-    snprintf(label, sizeof(label), "%s##clog_%llu_%d", log.firstLine.c_str(),
-             static_cast<unsigned long long>(ve.uid), visIdx);
+    snprintf(label, sizeof(label), "%s##clog_%llu_%d", log.firstLine.c_str(), static_cast<unsigned long long>(ve.uid),
+             visIdx);
 
-    if (ImGui::Selectable(label, isSel, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
-    {
+    if (ImGui::Selectable(label, isSel, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
         m_selectedIndex = visIdx;
         // Double-click: navigate to source
-        if (ImGui::IsMouseDoubleClicked(0) && onDoubleClickEntry &&
-            !log.sourceFile.empty())
-        {
+        if (ImGui::IsMouseDoubleClicked(0) && onDoubleClickEntry && !log.sourceFile.empty()) {
             onDoubleClickEntry(log.sourceFile, log.sourceLine);
         }
     }
 
     // Collapse count badge
-    if (ve.count > 1)
-    {
+    if (ve.count > 1) {
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::LOG_BADGE);
         ImGui::Text("%d", ve.count);
@@ -586,8 +549,7 @@ void ConsolePanel::RenderRow(int visIdx, const VisibleEntry &ve)
 
 const ImVec4 &ConsolePanel::LevelColor(LogLevel lv) const
 {
-    switch (lv)
-    {
+    switch (lv) {
     case LOG_ERROR:
     case LOG_FATAL:
         return EditorTheme::LOG_ERROR;
@@ -612,8 +574,7 @@ std::string ConsolePanel::CurrentTimestamp()
 #endif
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%03d", tm.tm_hour, tm.tm_min, tm.tm_sec,
-             static_cast<int>(ms.count()));
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%03d", tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(ms.count()));
     return buf;
 }
 

@@ -43,7 +43,10 @@ class ProjectPanel : public EditorPanel
     void InvalidateMaterialThumbnail(const std::string &filePath);
 
     /// State persistence
-    std::string GetCurrentPath() const { return m_currentPath; }
+    std::string GetCurrentPath() const
+    {
+        return m_currentPath;
+    }
     void SetCurrentPath(const std::string &path);
 
     // ── Notification callbacks ───────────────────────────────────────
@@ -62,7 +65,8 @@ class ProjectPanel : public EditorPanel
     /// Create script: (currentPath, name) → (ok, errorMsg)
     std::function<std::pair<bool, std::string>(const std::string &, const std::string &)> createScript;
     /// Create shader: (currentPath, name, type) → (ok, errorMsg)
-    std::function<std::pair<bool, std::string>(const std::string &, const std::string &, const std::string &)> createShader;
+    std::function<std::pair<bool, std::string>(const std::string &, const std::string &, const std::string &)>
+        createShader;
     /// Create material: (currentPath, name) → (ok, errorMsg)
     std::function<std::pair<bool, std::string>(const std::string &, const std::string &)> createMaterial;
     /// Create scene: (currentPath, name) → (ok, errorMsg)
@@ -181,8 +185,7 @@ class ProjectPanel : public EditorPanel
 
         bool operator==(const LabelCacheKey &o) const
         {
-            return type == o.type && expanded == o.expanded && widthPx == o.widthPx
-                   && path == o.path && name == o.name;
+            return type == o.type && expanded == o.expanded && widthPx == o.widthPx && path == o.path && name == o.name;
         }
     };
     struct LabelCacheKeyHash
@@ -245,8 +248,7 @@ class ProjectPanel : public EditorPanel
     int64_t GetMaterialMtimeNs(const std::string &filePath);
 
     // Static helper: downsample texture to max_px
-    static bool DownsampleTexture(const std::string &filePath, int maxPx,
-                                  std::vector<unsigned char> &outPixels,
+    static bool DownsampleTexture(const std::string &filePath, int maxPx, std::vector<unsigned char> &outPixels,
                                   int &outWidth, int &outHeight);
 
     // ── File-type icon cache ─────────────────────────────────────────
@@ -393,8 +395,8 @@ class ProjectPanel : public EditorPanel
         float topSpacer = 0.0f;
         float bottomSpacer = 0.0f;
     };
-    GridRange GetVisibleGridRange(InxGUIContext *ctx, int itemCount, int cols,
-                                  float rowHeight, float startY = 0.0f) const;
+    GridRange GetVisibleGridRange(InxGUIContext *ctx, int itemCount, int cols, float rowHeight,
+                                  float startY = 0.0f) const;
     float GetGridTextLineHeight(InxGUIContext *ctx);
     const LabelEntry &GetCachedItemLabel(InxGUIContext *ctx, const FileItem &item, float textRegionW);
 };

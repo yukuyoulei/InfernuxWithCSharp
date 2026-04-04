@@ -1,7 +1,7 @@
+#include "Infernux.h"
 #include "gui/InxGUIContext.h"
 #include "gui/InxGUIRenderable.h"
 #include "gui/InxResourcePreviewer.h"
-#include "Infernux.h"
 #ifdef DrawText
 #undef DrawText
 #endif
@@ -64,8 +64,7 @@ PropertyDesc DecodePropertyDesc(const py::dict &d)
     p.type = static_cast<PropertyDesc::Type>(d["t"].cast<int>());
     p.widgetId = d["w"].cast<std::string>();
     p.label = d["n"].cast<std::string>();
-    switch (p.type)
-    {
+    switch (p.type) {
     case PropertyDesc::Float:
         p.fVal[0] = d["f"].cast<float>();
         break;
@@ -128,8 +127,7 @@ std::vector<PropertyDesc> DecodePropertyBatch(py::list descriptors)
     std::vector<PropertyDesc> props;
     const int n = static_cast<int>(py::len(descriptors));
     props.reserve(n);
-    for (int i = 0; i < n; ++i)
-    {
+    for (int i = 0; i < n; ++i) {
         props.push_back(DecodePropertyDesc(descriptors[i].cast<py::dict>()));
     }
     return props;
@@ -138,11 +136,9 @@ std::vector<PropertyDesc> DecodePropertyBatch(py::list descriptors)
 py::dict EncodePropertyChanges(const std::vector<PropertyChange> &changes)
 {
     py::dict result;
-    for (const auto &c : changes)
-    {
+    for (const auto &c : changes) {
         py::int_ key(c.index);
-        switch (c.type)
-        {
+        switch (c.type) {
         case PropertyDesc::Float:
             result[key] = py::float_(c.fVal[0]);
             break;
@@ -180,9 +176,8 @@ py::dict EncodePropertyChanges(const std::vector<PropertyChange> &changes)
 void RegisterGUIBindings(py::module_ &m)
 {
     py::class_<PropertyBatchPlan, std::shared_ptr<PropertyBatchPlan>>(m, "PropertyBatchPlan")
-        .def_property_readonly("size", [](const PropertyBatchPlan &plan) {
-            return static_cast<int>(plan.descriptors.size());
-        });
+        .def_property_readonly("size",
+                               [](const PropertyBatchPlan &plan) { return static_cast<int>(plan.descriptors.size()); });
 
     py::class_<InxGUIContext>(m, "InxGUIContext")
         .def("label", &InxGUIContext::Label)
@@ -746,9 +741,10 @@ void RegisterGUIBindings(py::module_ &m)
     // ── StatusBarPanel ─────────────────────────────────────────────────
     py::class_<StatusBarPanel, InxGUIRenderable, std::shared_ptr<StatusBarPanel>>(m, "StatusBarPanel")
         .def(py::init<>())
-        .def("set_console_panel",
-             [](StatusBarPanel &self, std::shared_ptr<ConsolePanel> panel) { self.SetConsolePanel(panel.get()); },
-             py::arg("console"), py::keep_alive<1, 2>(), "Wire to ConsolePanel for click-to-select-latest")
+        .def(
+            "set_console_panel",
+            [](StatusBarPanel &self, std::shared_ptr<ConsolePanel> panel) { self.SetConsolePanel(panel.get()); },
+            py::arg("console"), py::keep_alive<1, 2>(), "Wire to ConsolePanel for click-to-select-latest")
         .def("set_latest_message", &StatusBarPanel::SetLatestMessage, py::arg("message"), py::arg("level"),
              "Show a new log message in the left zone")
         .def("clear_counts", &StatusBarPanel::ClearCounts, "Reset counts and latest message")
@@ -796,8 +792,7 @@ void RegisterGUIBindings(py::module_ &m)
             },
             py::arg("settings"), "Set camera settings from dict")
         .def_property(
-            "sync_camera_from_engine",
-            [](const ToolbarPanel &self) -> py::object { return py::none(); },
+            "sync_camera_from_engine", [](const ToolbarPanel &self) -> py::object { return py::none(); },
             [](ToolbarPanel &self, py::function fn) {
                 self.syncCameraFromEngine = [fn]() -> ToolbarPanel::CameraSettings {
                     py::dict d = fn();
@@ -813,8 +808,7 @@ void RegisterGUIBindings(py::module_ &m)
             },
             "Set a Python callback that returns camera settings dict")
         .def_property(
-            "apply_camera_to_engine",
-            [](const ToolbarPanel &self) -> py::object { return py::none(); },
+            "apply_camera_to_engine", [](const ToolbarPanel &self) -> py::object { return py::none(); },
             [](ToolbarPanel &self, py::function fn) {
                 self.applyCameraToEngine = [fn](const ToolbarPanel::CameraSettings &s) {
                     py::dict d;
@@ -862,8 +856,8 @@ void RegisterGUIBindings(py::module_ &m)
         .def_property("ui_mode", &HierarchyPanel::GetUiMode, &HierarchyPanel::SetUiMode)
         .def("clear_search", &HierarchyPanel::ClearSearch)
         .def("clear_selection_and_notify", &HierarchyPanel::ClearSelectionAndNotify)
-        .def("set_selected_object_by_id", &HierarchyPanel::SetSelectedObjectById,
-             py::arg("id"), py::arg("clear_search") = false)
+        .def("set_selected_object_by_id", &HierarchyPanel::SetSelectedObjectById, py::arg("id"),
+             py::arg("clear_search") = false)
         .def("expand_to_object", &HierarchyPanel::ExpandToObject, py::arg("obj_id"))
         .def("set_pending_expand_id", &HierarchyPanel::SetPendingExpandId, py::arg("obj_id"))
         // Selection callbacks
@@ -930,10 +924,13 @@ void RegisterGUIBindings(py::module_ &m)
         .def(py::init<>())
         // Public API
         .def("set_root_path", &ProjectPanel::SetRootPath, py::arg("path"))
-        .def("setup_from_engine", [](ProjectPanel &self, Infernux &engine) {
-            self.SetRenderer(engine.GetRenderer());
-            self.SetAssetDatabase(engine.GetAssetDatabase());
-        }, py::arg("engine"))
+        .def(
+            "setup_from_engine",
+            [](ProjectPanel &self, Infernux &engine) {
+                self.SetRenderer(engine.GetRenderer());
+                self.SetAssetDatabase(engine.GetAssetDatabase());
+            },
+            py::arg("engine"))
         .def("set_icons_directory", &ProjectPanel::SetIconsDirectory, py::arg("dir"))
         .def("clear_selection", &ProjectPanel::ClearSelection)
         .def("set_selected_file", &ProjectPanel::SetSelectedFile, py::arg("path"))
@@ -992,7 +989,7 @@ void RegisterGUIBindings(py::module_ &m)
     py::class_<InspectorPanel::TransformData>(m, "InspectorTransformData")
         .def(py::init<>())
         .def_readwrite("px", &InspectorPanel::TransformData::px)
-        .def_readwrite("py_", &InspectorPanel::TransformData::py)  // avoid shadow of pybind11 py
+        .def_readwrite("py_", &InspectorPanel::TransformData::py) // avoid shadow of pybind11 py
         .def_readwrite("pz", &InspectorPanel::TransformData::pz)
         .def_readwrite("rx", &InspectorPanel::TransformData::rx)
         .def_readwrite("ry", &InspectorPanel::TransformData::ry)

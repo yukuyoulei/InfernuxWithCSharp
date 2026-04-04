@@ -18,8 +18,7 @@ static constexpr float DRAG_SPEED_FINE = 0.01f;
 // Construction
 // ============================================================================
 
-InspectorPanel::InspectorPanel()
-    : EditorPanel("Inspector", "inspector")
+InspectorPanel::InspectorPanel() : EditorPanel("Inspector", "inspector")
 {
 }
 
@@ -35,8 +34,7 @@ std::unordered_map<std::string, double> InspectorPanel::ConsumeSubTimings()
     out["compList"] = m_subGetComponents;
     out["compBody"] = m_subComponentBodies;
     out["material"] = m_subMaterials;
-    if (consumeComponentBodyProfile)
-    {
+    if (consumeComponentBodyProfile) {
         auto bodyMetrics = consumeComponentBodyProfile();
         for (const auto &kv : bodyMetrics)
             out[kv.first] += kv.second;
@@ -58,8 +56,7 @@ const std::string &InspectorPanel::Tr(const std::string &key)
     auto it = m_trCache.find(key);
     if (it != m_trCache.end())
         return it->second;
-    if (translate)
-    {
+    if (translate) {
         auto &ref = m_trCache[key];
         ref = translate(key);
         return ref;
@@ -73,8 +70,7 @@ const std::string &InspectorPanel::Tr(const std::string &key)
 
 void InspectorPanel::SetSelectedObjectId(uint64_t id)
 {
-    if (m_selectedObjectId != id)
-    {
+    if (m_selectedObjectId != id) {
         m_cachedObjInfoId = 0; // invalidate cache
         m_cachedComponentListObjId = 0;
         m_cachedComponents.clear();
@@ -82,8 +78,7 @@ void InspectorPanel::SetSelectedObjectId(uint64_t id)
         m_cachedValueRefreshTime = 0.0f;
     }
     m_selectedObjectId = id;
-    if (id != 0)
-    {
+    if (id != 0) {
         m_selectedFile.clear();
         m_assetCategory.clear();
         m_mode = InspectorMode::Object;
@@ -103,8 +98,7 @@ void InspectorPanel::ClearSelectedObject()
 
 void InspectorPanel::SetSelectedFile(const std::string &filePath, const std::string &category)
 {
-    if (filePath != m_selectedFile)
-    {
+    if (filePath != m_selectedFile) {
         m_selectedFile = filePath;
         m_cachedObjInfoId = 0;
         m_cachedComponentListObjId = 0;
@@ -112,15 +106,12 @@ void InspectorPanel::SetSelectedFile(const std::string &filePath, const std::str
         m_cachedValueGeneration = 0;
         m_cachedValueRefreshTime = 0.0f;
     }
-    if (!filePath.empty())
-    {
+    if (!filePath.empty()) {
         m_assetCategory = category;
         m_mode = category.empty() ? InspectorMode::Preview : InspectorMode::Asset;
         // Clear object selection when file is selected
         m_selectedObjectId = 0;
-    }
-    else
-    {
+    } else {
         m_assetCategory.clear();
         m_mode = InspectorMode::Object;
     }
@@ -137,18 +128,14 @@ void InspectorPanel::ClearSelectedFile()
 
 void InspectorPanel::SetDetailFile(const std::string &filePath, const std::string &category)
 {
-    if (filePath != m_selectedFile)
-    {
+    if (filePath != m_selectedFile) {
         m_selectedFile = filePath;
     }
-    if (!filePath.empty())
-    {
+    if (!filePath.empty()) {
         m_assetCategory = category;
         m_mode = category.empty() ? InspectorMode::Preview : InspectorMode::Asset;
         // NOTE: unlike SetSelectedFile, does NOT clear object selection
-    }
-    else
-    {
+    } else {
         m_assetCategory.clear();
         m_mode = InspectorMode::Object;
     }
@@ -161,8 +148,7 @@ void InspectorPanel::SetDetailFile(const std::string &filePath, const std::strin
 void InspectorPanel::PreRender(InxGUIContext * /*ctx*/)
 {
     auto now = std::chrono::steady_clock::now();
-    m_frameTimeNow =
-        std::chrono::duration<float>(now.time_since_epoch()).count();
+    m_frameTimeNow = std::chrono::duration<float>(now.time_since_epoch()).count();
 }
 
 // ============================================================================
@@ -176,27 +162,21 @@ void InspectorPanel::OnRenderContent(InxGUIContext *ctx)
     bool hasDetailContent = !m_selectedFile.empty();
     bool fileOnly = hasDetailContent && m_selectedObjectId == 0;
 
-    if (fileOnly)
-    {
+    if (fileOnly) {
         // Full-height file view (asset inspector or generic preview)
         RenderRawDataModule(ctx, 0.0f);
-    }
-    else if (hasDetailContent &&
-             totalHeight > (EditorTheme::INSPECTOR_MIN_PROPS_H +
-                            EditorTheme::INSPECTOR_MIN_RAWDATA_H +
-                            EditorTheme::INSPECTOR_SPLITTER_H))
-    {
+    } else if (hasDetailContent &&
+               totalHeight > (EditorTheme::INSPECTOR_MIN_PROPS_H + EditorTheme::INSPECTOR_MIN_RAWDATA_H +
+                              EditorTheme::INSPECTOR_SPLITTER_H)) {
         float usableHeight = totalHeight - EditorTheme::INSPECTOR_SPLITTER_H;
         float propsHeight = usableHeight * m_propertiesRatio;
         float rawDataHeight = usableHeight - propsHeight;
 
-        if (propsHeight < EditorTheme::INSPECTOR_MIN_PROPS_H)
-        {
+        if (propsHeight < EditorTheme::INSPECTOR_MIN_PROPS_H) {
             propsHeight = EditorTheme::INSPECTOR_MIN_PROPS_H;
             rawDataHeight = usableHeight - propsHeight;
         }
-        if (rawDataHeight < EditorTheme::INSPECTOR_MIN_RAWDATA_H)
-        {
+        if (rawDataHeight < EditorTheme::INSPECTOR_MIN_RAWDATA_H) {
             rawDataHeight = EditorTheme::INSPECTOR_MIN_RAWDATA_H;
             propsHeight = usableHeight - rawDataHeight;
         }
@@ -204,9 +184,7 @@ void InspectorPanel::OnRenderContent(InxGUIContext *ctx)
         RenderPropertiesModule(ctx, propsHeight);
         RenderSplitter(ctx, totalHeight);
         RenderRawDataModule(ctx, rawDataHeight);
-    }
-    else
-    {
+    } else {
         RenderPropertiesModule(ctx, 0.0f);
     }
 }
@@ -222,34 +200,24 @@ void InspectorPanel::RenderPropertiesModule(InxGUIContext *ctx, float height)
 
     bool childHovered = false;
     bool childVisible = ImGui::BeginChild("PropertiesModule", ImVec2(0, height), ImGuiChildFlags_Borders);
-    if (childVisible)
-    {
+    if (childVisible) {
         childHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_None);
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, EditorTheme::INSPECTOR_FRAME_PAD);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, EditorTheme::INSPECTOR_ITEM_SPC);
 
         bool multi = isMultiSelection && isMultiSelection();
-        if (multi)
-        {
+        if (multi) {
             auto ids = getSelectedIds ? getSelectedIds() : std::vector<uint64_t>{};
-            if (ids.size() > 1)
-            {
+            if (ids.size() > 1) {
                 RenderMultiEdit(ctx, ids);
-            }
-            else
-            {
+            } else {
                 ImGui::TextUnformatted(Tr("inspector.no_objects_selected").c_str());
             }
-        }
-        else
-        {
-            if (m_selectedObjectId != 0)
-            {
+        } else {
+            if (m_selectedObjectId != 0) {
                 RenderSingleObject(ctx, m_selectedObjectId);
-            }
-            else
-            {
+            } else {
                 ImGui::TextUnformatted(Tr("inspector.no_object_selected").c_str());
             }
         }
@@ -269,11 +237,9 @@ void InspectorPanel::RenderPropertiesModule(InxGUIContext *ctx, float height)
         ++m_idleFrames;
 
     // Drag-drop target for scripts on the whole PropertiesModule
-    if (m_selectedObjectId != 0 && ImGui::BeginDragDropTarget())
-    {
+    if (m_selectedObjectId != 0 && ImGui::BeginDragDropTarget()) {
         const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SCRIPT_FILE");
-        if (payload && handleScriptDrop)
-        {
+        if (payload && handleScriptDrop) {
             std::string path(static_cast<const char *>(payload->Data), payload->DataSize);
             // Remove trailing null if present
             if (!path.empty() && path.back() == '\0')
@@ -291,24 +257,18 @@ void InspectorPanel::RenderPropertiesModule(InxGUIContext *ctx, float height)
 void InspectorPanel::RenderRawDataModule(InxGUIContext *ctx, float height)
 {
     bool childVisible = ImGui::BeginChild("RawDataModule", ImVec2(0, height), ImGuiChildFlags_Borders);
-    if (childVisible)
-    {
-        if (!m_selectedFile.empty() && m_mode == InspectorMode::Asset)
-        {
+    if (childVisible) {
+        if (!m_selectedFile.empty() && m_mode == InspectorMode::Asset) {
             if (renderAssetInspector)
                 renderAssetInspector(ctx, m_selectedFile, m_assetCategory);
             else
                 ImGui::TextUnformatted("(Asset inspector not available)");
-        }
-        else if (!m_selectedFile.empty())
-        {
+        } else if (!m_selectedFile.empty()) {
             if (renderFilePreview)
                 renderFilePreview(ctx, m_selectedFile);
             else
                 ImGui::TextUnformatted(m_selectedFile.c_str());
-        }
-        else
-        {
+        } else {
             ImGui::TextUnformatted(Tr("inspector.no_selection").c_str());
         }
     }
@@ -332,14 +292,11 @@ float InspectorPanel::RenderSplitter(InxGUIContext * /*ctx*/, float totalHeight)
     if (hovered || active)
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 
-    if (active)
-    {
+    if (active) {
         float deltaY = ImGui::GetMouseDragDelta(0).y;
-        if (std::abs(deltaY) > 1.0f)
-        {
+        if (std::abs(deltaY) > 1.0f) {
             float usableHeight = totalHeight - EditorTheme::INSPECTOR_SPLITTER_H;
-            if (usableHeight > 0.0f)
-            {
+            if (usableHeight > 0.0f) {
                 float newPropsHeight = m_propertiesRatio * usableHeight + deltaY;
                 float newRatio = newPropsHeight / usableHeight;
                 float minRatio = EditorTheme::INSPECTOR_MIN_PROPS_H / usableHeight;
@@ -363,17 +320,14 @@ void InspectorPanel::RenderSingleObject(InxGUIContext *ctx, uint64_t objId)
     using clock = std::chrono::high_resolution_clock;
 
     uint64_t valueGeneration = getValueGeneration ? getValueGeneration() : 0;
-    bool refreshSnapshots = (m_cachedObjInfoId != objId) ||
-                            (m_cachedComponentListObjId != objId) ||
-                            (m_idleFrames <= 0) ||
-                            (valueGeneration != m_cachedValueGeneration) ||
+    bool refreshSnapshots = (m_cachedObjInfoId != objId) || (m_cachedComponentListObjId != objId) ||
+                            (m_idleFrames <= 0) || (valueGeneration != m_cachedValueGeneration) ||
                             ((m_frameTimeNow - m_cachedValueRefreshTime) >= VALUE_CACHE_TTL);
 
     // ── Sub-timing: getObjectInfo + getPrefabInfo ────────────────────
     auto t0 = clock::now();
 
-    if (refreshSnapshots)
-    {
+    if (refreshSnapshots) {
         if (getObjectInfo)
             m_cachedObjInfo = getObjectInfo(objId);
         else
@@ -396,8 +350,7 @@ void InspectorPanel::RenderSingleObject(InxGUIContext *ctx, uint64_t objId)
     ImGui::PushID(static_cast<int>(objId));
 
     // Prefab header bar (if applicable)
-    if (!info.prefabGuid.empty())
-    {
+    if (!info.prefabGuid.empty()) {
         RenderPrefabHeader(ctx, objId, pinfo);
     }
 
@@ -418,17 +371,14 @@ void InspectorPanel::RenderSingleObject(InxGUIContext *ctx, uint64_t objId)
     auto t2 = clock::now();
 
     // Transform (skip for screen-space UI elements)
-    if (!info.hideTransform)
-    {
+    if (!info.hideTransform) {
         if (m_cachedTransformIconId == 0 && getComponentIconId)
             m_cachedTransformIconId = getComponentIconId("Transform", false);
-        auto [headerOpen, _unused] = RenderComponentHeader(
-            ctx, "Transform", "transform", m_cachedTransformIconId,
-            /*showEnabled=*/false, /*isEnabled=*/true, /*suffix=*/"",
-            /*defaultOpen=*/true);
+        auto [headerOpen, _unused] = RenderComponentHeader(ctx, "Transform", "transform", m_cachedTransformIconId,
+                                                           /*showEnabled=*/false, /*isEnabled=*/true, /*suffix=*/"",
+                                                           /*defaultOpen=*/true);
 
-        if (headerOpen)
-        {
+        if (headerOpen) {
             if (isPrefabTransformReadonly)
                 ImGui::BeginDisabled();
             RenderTransform(ctx, objId);
@@ -447,8 +397,7 @@ void InspectorPanel::RenderSingleObject(InxGUIContext *ctx, uint64_t objId)
     // ── Sub-timing: getComponentList ─────────────────────────────────
     auto t4 = clock::now();
 
-    if (refreshSnapshots)
-    {
+    if (refreshSnapshots) {
         if (getComponentList)
             m_cachedComponents = getComponentList(objId);
         else
@@ -467,52 +416,40 @@ void InspectorPanel::RenderSingleObject(InxGUIContext *ctx, uint64_t objId)
     auto t6 = clock::now();
 
     // Render each component
-    for (const auto &comp : components)
-    {
+    for (const auto &comp : components) {
         ImGui::PushID(static_cast<int>(comp.componentId));
 
-        auto [headerOpen, newEnabled] = RenderComponentHeader(
-            ctx, comp.typeName,
-            "comp_" + std::to_string(comp.componentId),
-            comp.iconId,
-            /*showEnabled=*/true, comp.enabled,
-            comp.isScript ? " (Script)" : "",
-            /*defaultOpen=*/true);
+        auto [headerOpen, newEnabled] =
+            RenderComponentHeader(ctx, comp.typeName, "comp_" + std::to_string(comp.componentId), comp.iconId,
+                                  /*showEnabled=*/true, comp.enabled, comp.isScript ? " (Script)" : "",
+                                  /*defaultOpen=*/true);
 
         // Right-click context menu — only call Python when popup is open
         bool componentRemoved = false;
         {
             const char *ctxPopupId = comp.isScript ? "py_comp_ctx" : "comp_ctx";
-            if (ImGui::BeginPopupContextItem(ctxPopupId))
-            {
-                if (renderComponentContextMenu)
-                {
-                    componentRemoved = renderComponentContextMenu(
-                        ctx, objId, comp.typeName, comp.componentId, comp.isNative);
+            if (ImGui::BeginPopupContextItem(ctxPopupId)) {
+                if (renderComponentContextMenu) {
+                    componentRemoved =
+                        renderComponentContextMenu(ctx, objId, comp.typeName, comp.componentId, comp.isNative);
                 }
                 ImGui::EndPopup();
             }
         }
 
-        if (!componentRemoved)
-        {
+        if (!componentRemoved) {
             // Enabled toggle
-            if (newEnabled != comp.enabled && setComponentEnabled)
-            {
+            if (newEnabled != comp.enabled && setComponentEnabled) {
                 setComponentEnabled(objId, comp.componentId, newEnabled, comp.isNative);
             }
 
             // Component body
-            if (headerOpen)
-            {
-                if (comp.isBroken && !comp.brokenError.empty())
-                {
+            if (headerOpen) {
+                if (comp.isBroken && !comp.brokenError.empty()) {
                     ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::ERROR_TEXT);
                     ImGui::TextWrapped("%s", comp.brokenError.c_str());
                     ImGui::PopStyleColor();
-                }
-                else if (renderComponentBody)
-                {
+                } else if (renderComponentBody) {
                     renderComponentBody(ctx, objId, comp.typeName, comp.componentId, comp.isNative);
                 }
             }
@@ -560,8 +497,7 @@ void InspectorPanel::RenderMultiEdit(InxGUIContext *ctx, const std::vector<uint6
 
     // For multi-edit, we render Transform for the first object as primary
     // and component body rendering is delegated to Python callbacks
-    if (!ids.empty())
-    {
+    if (!ids.empty()) {
         if (getObjectInfo)
             m_cachedObjInfo = getObjectInfo(ids[0]);
 
@@ -571,13 +507,11 @@ void InspectorPanel::RenderMultiEdit(InxGUIContext *ctx, const std::vector<uint6
 
         // Transform header
         uint64_t transformIcon = getComponentIconId ? getComponentIconId("Transform", false) : 0;
-        auto [headerOpen, _unused] = RenderComponentHeader(
-            ctx, "Transform", "multi_transform", transformIcon,
-            /*showEnabled=*/false, /*isEnabled=*/true, /*suffix=*/"",
-            /*defaultOpen=*/true);
+        auto [headerOpen, _unused] = RenderComponentHeader(ctx, "Transform", "multi_transform", transformIcon,
+                                                           /*showEnabled=*/false, /*isEnabled=*/true, /*suffix=*/"",
+                                                           /*defaultOpen=*/true);
 
-        if (headerOpen)
-        {
+        if (headerOpen) {
             // Render transform for primary object
             RenderTransform(ctx, ids[0]);
         }
@@ -588,19 +522,14 @@ void InspectorPanel::RenderMultiEdit(InxGUIContext *ctx, const std::vector<uint6
         if (getComponentList)
             components = getComponentList(ids[0]);
 
-        for (const auto &comp : components)
-        {
+        for (const auto &comp : components) {
             ImGui::PushID(static_cast<int>(comp.componentId));
 
-            uint64_t iconId = getComponentIconId
-                                  ? getComponentIconId(comp.typeName, comp.isScript)
-                                  : 0;
+            uint64_t iconId = getComponentIconId ? getComponentIconId(comp.typeName, comp.isScript) : 0;
 
-            auto [compOpen, newEnabled] = RenderComponentHeader(
-                ctx, comp.typeName,
-                "multi_comp_" + std::to_string(comp.componentId),
-                iconId, true, comp.enabled,
-                comp.isScript ? " (Script)" : "", true);
+            auto [compOpen, newEnabled] =
+                RenderComponentHeader(ctx, comp.typeName, "multi_comp_" + std::to_string(comp.componentId), iconId,
+                                      true, comp.enabled, comp.isScript ? " (Script)" : "", true);
 
             if (newEnabled != comp.enabled && setComponentEnabled)
                 setComponentEnabled(ids[0], comp.componentId, newEnabled, comp.isNative);
@@ -631,8 +560,7 @@ void InspectorPanel::RenderObjectHeader(InxGUIContext *ctx, uint64_t objId, cons
     // Active checkbox
     bool active = info.active;
     bool newActive = RenderInspectorCheckbox(ctx, "##obj_active", active);
-    if (newActive != active && setObjectProperty)
-    {
+    if (newActive != active && setObjectProperty) {
         m_cachedObjInfo.active = newActive;
         setObjectProperty(objId, "active", newActive ? "true" : "false");
     }
@@ -644,11 +572,9 @@ void InspectorPanel::RenderObjectHeader(InxGUIContext *ctx, uint64_t objId, cons
     char nameBuf[256];
     std::strncpy(nameBuf, info.name.c_str(), sizeof(nameBuf) - 1);
     nameBuf[sizeof(nameBuf) - 1] = '\0';
-    if (ImGui::InputText("##obj_name", nameBuf, sizeof(nameBuf)))
-    {
+    if (ImGui::InputText("##obj_name", nameBuf, sizeof(nameBuf))) {
         std::string newName(nameBuf);
-        if (newName != info.name && setObjectProperty)
-        {
+        if (newName != info.name && setObjectProperty) {
             m_cachedObjInfo.name = newName;
             setObjectProperty(objId, "name", newName);
         }
@@ -661,25 +587,22 @@ void InspectorPanel::RenderObjectHeader(InxGUIContext *ctx, uint64_t objId, cons
 
 void InspectorPanel::RefreshTagLayerCache()
 {
-    if (m_frameTimeNow - m_tagLayerCacheTime < TAG_LAYER_CACHE_TTL &&
-        !m_cachedTagItems.empty() && !m_cachedLayerItems.empty())
+    if (m_frameTimeNow - m_tagLayerCacheTime < TAG_LAYER_CACHE_TTL && !m_cachedTagItems.empty() &&
+        !m_cachedLayerItems.empty())
         return;
 
     m_tagLayerCacheTime = m_frameTimeNow;
 
-    if (getAllTags)
-    {
+    if (getAllTags) {
         m_cachedTags = getAllTags();
         m_cachedTagItems = m_cachedTags;
         m_cachedTagItems.push_back("Add Tag...");
     }
 
-    if (getAllLayers)
-    {
+    if (getAllLayers) {
         m_cachedLayers = getAllLayers();
         m_cachedLayerItems.clear();
-        for (size_t i = 0; i < m_cachedLayers.size(); ++i)
-        {
+        for (size_t i = 0; i < m_cachedLayers.size(); ++i) {
             std::string label = std::to_string(i) + ": ";
             label += m_cachedLayers[i].empty() ? "---" : m_cachedLayers[i];
             m_cachedLayerItems.push_back(std::move(label));
@@ -700,26 +623,20 @@ void InspectorPanel::RenderTagLayerRow(InxGUIContext *ctx, uint64_t objId, const
     ImGui::SameLine(0, 4.0f);
 
     int tagIdx = 0;
-    for (size_t i = 0; i < m_cachedTags.size(); ++i)
-    {
-        if (m_cachedTags[i] == info.tag)
-        {
+    for (size_t i = 0; i < m_cachedTags.size(); ++i) {
+        if (m_cachedTags[i] == info.tag) {
             tagIdx = static_cast<int>(i);
             break;
         }
     }
 
     int newTagIdx = SearchableCombo(ctx, "Tag", tagIdx, m_cachedTagItems, halfW - 30);
-    if (newTagIdx != tagIdx)
-    {
-        if (newTagIdx == static_cast<int>(m_cachedTags.size()))
-        {
+    if (newTagIdx != tagIdx) {
+        if (newTagIdx == static_cast<int>(m_cachedTags.size())) {
             // "Add Tag..." selected
             if (openWindow)
                 openWindow("tag_layer_settings");
-        }
-        else if (newTagIdx >= 0 && newTagIdx < static_cast<int>(m_cachedTags.size()))
-        {
+        } else if (newTagIdx >= 0 && newTagIdx < static_cast<int>(m_cachedTags.size())) {
             m_cachedObjInfo.tag = m_cachedTags[newTagIdx];
             if (setObjectProperty)
                 setObjectProperty(objId, "tag", m_cachedTags[newTagIdx]);
@@ -733,16 +650,12 @@ void InspectorPanel::RenderTagLayerRow(InxGUIContext *ctx, uint64_t objId, const
     float layerComboW = ImGui::GetContentRegionAvail().x;
 
     int newLayer = SearchableCombo(ctx, "Layer", info.layer, m_cachedLayerItems, layerComboW);
-    if (newLayer != info.layer)
-    {
-        if (newLayer == static_cast<int>(m_cachedLayerItems.size()) - 1)
-        {
+    if (newLayer != info.layer) {
+        if (newLayer == static_cast<int>(m_cachedLayerItems.size()) - 1) {
             // "Add Layer..." selected
             if (openWindow)
                 openWindow("tag_layer_settings");
-        }
-        else if (setObjectProperty)
-        {
+        } else if (setObjectProperty) {
             m_cachedObjInfo.layer = newLayer;
             setObjectProperty(objId, "layer", std::to_string(newLayer));
         }
@@ -770,8 +683,7 @@ void InspectorPanel::RenderTransform(InxGUIContext *ctx, uint64_t objId)
     ctx->Vector3Control(Tr("Rotation"), rot, DRAG_SPEED_DEFAULT, labelW);
     ctx->Vector3Control(Tr("Scale"), scl, DRAG_SPEED_FINE, labelW);
 
-    if (setTransformData)
-    {
+    if (setTransformData) {
         bool changed = false;
         changed |= std::abs(pos[0] - td.px) > 1e-6f;
         changed |= std::abs(pos[1] - td.py) > 1e-6f;
@@ -783,12 +695,17 @@ void InspectorPanel::RenderTransform(InxGUIContext *ctx, uint64_t objId)
         changed |= std::abs(scl[1] - td.sy) > 1e-6f;
         changed |= std::abs(scl[2] - td.sz) > 1e-6f;
 
-        if (changed)
-        {
+        if (changed) {
             TransformData newTd;
-            newTd.px = pos[0]; newTd.py = pos[1]; newTd.pz = pos[2];
-            newTd.rx = rot[0]; newTd.ry = rot[1]; newTd.rz = rot[2];
-            newTd.sx = scl[0]; newTd.sy = scl[1]; newTd.sz = scl[2];
+            newTd.px = pos[0];
+            newTd.py = pos[1];
+            newTd.pz = pos[2];
+            newTd.rx = rot[0];
+            newTd.ry = rot[1];
+            newTd.rz = rot[2];
+            newTd.sx = scl[0];
+            newTd.sy = scl[1];
+            newTd.sz = scl[2];
             setTransformData(objId, newTd);
         }
     }
@@ -813,8 +730,7 @@ void InspectorPanel::RenderPrefabHeader(InxGUIContext * /*ctx*/, uint64_t objId,
 
     ImGui::SameLine(0, gap * 2);
     EditorTheme::PushFlatButtonStyle(EditorTheme::INSPECTOR_INLINE_BTN_IDLE);
-    if (ImGui::Button(Tr("inspector.prefab_select").c_str()))
-    {
+    if (ImGui::Button(Tr("inspector.prefab_select").c_str())) {
         if (prefabAction)
             prefabAction(objId, "select");
     }
@@ -822,8 +738,7 @@ void InspectorPanel::RenderPrefabHeader(InxGUIContext * /*ctx*/, uint64_t objId,
 
     ImGui::SameLine(0, gap);
     EditorTheme::PushFlatButtonStyle(EditorTheme::INSPECTOR_INLINE_BTN_IDLE);
-    if (ImGui::Button(Tr("inspector.prefab_open").c_str()))
-    {
+    if (ImGui::Button(Tr("inspector.prefab_open").c_str())) {
         if (prefabAction)
             prefabAction(objId, "open");
     }
@@ -831,16 +746,14 @@ void InspectorPanel::RenderPrefabHeader(InxGUIContext * /*ctx*/, uint64_t objId,
 
     ImGui::SameLine(0, gap * 3);
 
-    if (pinfo.overrideCount > 0)
-    {
+    if (pinfo.overrideCount > 0) {
         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::WARNING_TEXT);
         ImGui::Text("%d %s", pinfo.overrideCount, Tr("inspector.overrides").c_str());
         ImGui::PopStyleColor();
 
         ImGui::SameLine(0, gap * 2);
         EditorTheme::PushFlatButtonStyle(EditorTheme::INSPECTOR_INLINE_BTN_IDLE);
-        if (ImGui::Button(Tr("inspector.prefab_apply").c_str()))
-        {
+        if (ImGui::Button(Tr("inspector.prefab_apply").c_str())) {
             if (prefabAction)
                 prefabAction(objId, "apply");
         }
@@ -848,15 +761,12 @@ void InspectorPanel::RenderPrefabHeader(InxGUIContext * /*ctx*/, uint64_t objId,
 
         ImGui::SameLine(0, gap);
         EditorTheme::PushFlatButtonStyle(EditorTheme::INSPECTOR_INLINE_BTN_IDLE);
-        if (ImGui::Button(Tr("inspector.prefab_revert").c_str()))
-        {
+        if (ImGui::Button(Tr("inspector.prefab_revert").c_str())) {
             if (prefabAction)
                 prefabAction(objId, "revert");
         }
         ImGui::PopStyleColor(3);
-    }
-    else
-    {
+    } else {
         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::TEXT_DIM2);
         ImGui::TextUnformatted(Tr("inspector.no_overrides").c_str());
         ImGui::PopStyleColor();
@@ -870,21 +780,18 @@ void InspectorPanel::RenderPrefabHeader(InxGUIContext * /*ctx*/, uint64_t objId,
 // Component header (icon + checkbox + collapsing header)
 // ============================================================================
 
-std::pair<bool, bool> InspectorPanel::RenderComponentHeader(
-    InxGUIContext * /*ctx*/, const std::string &typeName,
-    const std::string &headerId, uint64_t iconId,
-    bool showEnabled, bool isEnabled,
-    const std::string &suffix, bool defaultOpen)
+std::pair<bool, bool> InspectorPanel::RenderComponentHeader(InxGUIContext * /*ctx*/, const std::string &typeName,
+                                                            const std::string &headerId, uint64_t iconId,
+                                                            bool showEnabled, bool isEnabled, const std::string &suffix,
+                                                            bool defaultOpen)
 {
     bool newEnabled = isEnabled;
 
     // Build display name: insert spaces before uppercase chars
     std::string displayName;
-    for (size_t i = 0; i < typeName.size(); ++i)
-    {
+    for (size_t i = 0; i < typeName.size(); ++i) {
         char c = typeName[i];
-        if (i > 0 && std::isupper(static_cast<unsigned char>(c)))
-        {
+        if (i > 0 && std::isupper(static_cast<unsigned char>(c))) {
             char prev = typeName[i - 1];
             if (!std::isupper(static_cast<unsigned char>(prev)) && prev != ' ')
                 displayName += ' ';
@@ -918,8 +825,7 @@ std::pair<bool, bool> InspectorPanel::RenderComponentHeader(
     float indent = EditorTheme::INSPECTOR_HEADER_CONTENT_INDENT;
     ImGui::SameLine(indent, 0);
 
-    if (iconId != 0)
-    {
+    if (iconId != 0) {
         float iconSize = EditorTheme::COMPONENT_ICON_SIZE;
         ImGui::Dummy(ImVec2(iconSize, (std::max)(headerHeight, iconSize)));
         ImVec2 slotMin = ImGui::GetItemRectMin();
@@ -930,15 +836,12 @@ std::pair<bool, bool> InspectorPanel::RenderComponentHeader(
 
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImTextureRef texRef(static_cast<ImTextureID>(iconId));
-        drawList->AddImage(texRef,
-                           ImVec2(drawX, drawY),
-                           ImVec2(drawX + drawSize, drawY + drawSize));
+        drawList->AddImage(texRef, ImVec2(drawX, drawY), ImVec2(drawX + drawSize, drawY + drawSize));
 
         ImGui::SameLine(0, EditorTheme::INSPECTOR_HEADER_ITEM_SPC.x);
     }
 
-    if (showEnabled)
-    {
+    if (showEnabled) {
         newEnabled = RenderInspectorCheckbox(nullptr, "##hdr_en", isEnabled);
         ImGui::SameLine(0, EditorTheme::INSPECTOR_HEADER_ITEM_SPC.x);
     }
@@ -977,8 +880,7 @@ void InspectorPanel::RenderAddComponentButton(InxGUIContext * /*ctx*/)
 {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, EditorTheme::ADD_COMP_FRAME_PAD);
     ImGui::SetCursorPosX(EditorTheme::INSPECTOR_ACTION_ALIGN_X);
-    if (ImGui::Button(Tr("inspector.add_component").c_str(), ImVec2(-1, 0)))
-    {
+    if (ImGui::Button(Tr("inspector.add_component").c_str(), ImVec2(-1, 0))) {
         m_addCompSearch[0] = '\0';
         if (getAddComponentEntries)
             m_addCompEntries = getAddComponentEntries();
@@ -992,19 +894,16 @@ void InspectorPanel::RenderAddComponentPopup(InxGUIContext * /*ctx*/)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, EditorTheme::POPUP_ADD_COMP_PAD);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, EditorTheme::POPUP_ADD_COMP_SPC);
 
-    if (ImGui::BeginPopup("##add_component_popup"))
-    {
+    if (ImGui::BeginPopup("##add_component_popup")) {
         // Search field
         ImGui::SetNextItemWidth(EditorTheme::ADD_COMP_SEARCH_W);
-        ImGui::InputTextWithHint("##comp_search",
-                                 Tr("inspector.search_components").c_str(),
-                                 m_addCompSearch, sizeof(m_addCompSearch));
+        ImGui::InputTextWithHint("##comp_search", Tr("inspector.search_components").c_str(), m_addCompSearch,
+                                 sizeof(m_addCompSearch));
 
         ImGui::Separator();
 
         // Scrollable region
-        if (ImGui::BeginChild("##comp_list", ImVec2(0, 350), ImGuiChildFlags_None))
-        {
+        if (ImGui::BeginChild("##comp_list", ImVec2(0, 350), ImGuiChildFlags_None)) {
             std::string searchLower(m_addCompSearch);
             std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1016,11 +915,9 @@ void InspectorPanel::RenderAddComponentPopup(InxGUIContext * /*ctx*/)
             std::unordered_map<std::string, std::vector<const AddComponentEntry *>> categories;
             std::vector<std::string> categoryOrder;
 
-            for (const auto &entry : m_addCompEntries)
-            {
+            for (const auto &entry : m_addCompEntries) {
                 // Filter by search
-                if (!searchLower.empty())
-                {
+                if (!searchLower.empty()) {
                     std::string nameLower = entry.displayName;
                     std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
                                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1036,18 +933,15 @@ void InspectorPanel::RenderAddComponentPopup(InxGUIContext * /*ctx*/)
 
             std::sort(categoryOrder.begin(), categoryOrder.end());
 
-            for (const auto &cat : categoryOrder)
-            {
+            for (const auto &cat : categoryOrder) {
                 ImGui::TextUnformatted(cat.c_str());
                 ImGui::Separator();
 
-                for (const auto *entry : categories[cat])
-                {
+                for (const auto *entry : categories[cat]) {
                     foundAny = true;
                     ++uid;
                     std::string selectLabel = "  " + entry->displayName + "##" + std::to_string(uid);
-                    if (ImGui::Selectable(selectLabel.c_str()))
-                    {
+                    if (ImGui::Selectable(selectLabel.c_str())) {
                         if (addComponent)
                             addComponent(entry->displayName, entry->isNative, entry->scriptPath);
                         ImGui::CloseCurrentPopup();
@@ -1056,8 +950,7 @@ void InspectorPanel::RenderAddComponentPopup(InxGUIContext * /*ctx*/)
                 ImGui::Dummy(ImVec2(0, 4));
             }
 
-            if (!foundAny)
-            {
+            if (!foundAny) {
                 ImGui::TextUnformatted(Tr("inspector.no_components_found").c_str());
             }
         }
@@ -1087,9 +980,7 @@ int InspectorPanel::SearchableCombo(InxGUIContext * /*ctx*/, const char *label, 
     if (width > 0.0f)
         ImGui::SetNextItemWidth(width);
 
-    if (ImGui::Button((currentText + "##" + label).c_str(),
-                       ImVec2(width > 0.0f ? width : 0.0f, 0)))
-    {
+    if (ImGui::Button((currentText + "##" + label).c_str(), ImVec2(width > 0.0f ? width : 0.0f, 0))) {
         auto &state = m_comboStates[label];
         state.filter[0] = '\0';
         state.needsFocus = true;
@@ -1098,12 +989,10 @@ int InspectorPanel::SearchableCombo(InxGUIContext * /*ctx*/, const char *label, 
 
     int result = currentIdx;
 
-    if (ImGui::BeginPopup(popupId.c_str()))
-    {
+    if (ImGui::BeginPopup(popupId.c_str())) {
         auto &state = m_comboStates[label];
 
-        if (state.needsFocus)
-        {
+        if (state.needsFocus) {
             ImGui::SetKeyboardFocusHere();
             state.needsFocus = false;
         }
@@ -1115,10 +1004,8 @@ int InspectorPanel::SearchableCombo(InxGUIContext * /*ctx*/, const char *label, 
         std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-        for (int i = 0; i < static_cast<int>(items.size()); ++i)
-        {
-            if (!filterLower.empty())
-            {
+        for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+            if (!filterLower.empty()) {
                 std::string itemLower = items[i];
                 std::transform(itemLower.begin(), itemLower.end(), itemLower.begin(),
                                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1127,8 +1014,7 @@ int InspectorPanel::SearchableCombo(InxGUIContext * /*ctx*/, const char *label, 
             }
 
             bool selected = (i == currentIdx);
-            if (ImGui::Selectable(items[i].c_str(), selected))
-            {
+            if (ImGui::Selectable(items[i].c_str(), selected)) {
                 result = i;
                 ImGui::CloseCurrentPopup();
             }

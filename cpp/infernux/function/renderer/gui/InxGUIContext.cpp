@@ -1307,8 +1307,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
     constexpr float kMinLabelWidth = 156.0f;
 
     auto doLabel = [&](const std::string &label) {
-        if (!label.empty())
-        {
+        if (!label.empty()) {
             float w = labelWidth;
             if (w <= 0.0f)
                 w = std::max(ImGui::CalcTextSize(label.c_str()).x + 18.0f, kMinLabelWidth);
@@ -1316,21 +1315,17 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             ImGui::TextUnformatted(label.c_str());
             ImGui::SameLine(w);
             ImGui::SetNextItemWidth(-1);
-        }
-        else
-        {
+        } else {
             ImGui::SetNextItemWidth(-1);
         }
     };
 
     const int count = static_cast<int>(descriptors.size());
-    for (int i = 0; i < count; ++i)
-    {
+    for (int i = 0; i < count; ++i) {
         const auto &d = descriptors[i];
 
         // Layout: header / space
-        if (!d.header.empty())
-        {
+        if (!d.header.empty()) {
             ImGui::Spacing();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(d.header.c_str());
@@ -1338,8 +1333,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
         if (d.space > 0)
             ImGui::Dummy(ImVec2(0, d.space));
 
-        switch (d.type)
-        {
+        switch (d.type) {
         case PropertyDesc::Float: {
             doLabel(d.label);
             float val = d.fVal[0];
@@ -1350,8 +1344,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             else
                 ImGui::DragFloat(d.widgetId.c_str(), &val, d.speed, d.rangeMin, d.rangeMax);
             HandleDragCapture();
-            if (val != orig)
-            {
+            if (val != orig) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Float;
@@ -1366,14 +1359,12 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             int orig = val;
             CompensateWarp();
             if (d.slider && static_cast<int>(d.rangeMin) > -1000000)
-                ImGui::SliderInt(d.widgetId.c_str(), &val, static_cast<int>(d.rangeMin),
-                                 static_cast<int>(d.rangeMax));
+                ImGui::SliderInt(d.widgetId.c_str(), &val, static_cast<int>(d.rangeMin), static_cast<int>(d.rangeMax));
             else
                 ImGui::DragInt(d.widgetId.c_str(), &val, d.speed, static_cast<int>(d.rangeMin),
                                static_cast<int>(d.rangeMax));
             HandleDragCapture();
-            if (val != orig)
-            {
+            if (val != orig) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Int;
@@ -1391,8 +1382,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             ImGui::Checkbox(cbLabel.c_str(), &val);
             ImGui::SetWindowFontScale(1.0f);
             ImGui::PopStyleVar(1);
-            if (val != orig)
-            {
+            if (val != orig) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Bool;
@@ -1412,8 +1402,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             else
                 ImGui::InputText(d.widgetId.c_str(), buf, 256);
             std::string newStr(buf);
-            if (newStr != d.sVal)
-            {
+            if (newStr != d.sVal) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::String;
@@ -1426,8 +1415,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             float v[2] = {d.fVal[0], d.fVal[1]};
             float lw = d.label.empty() ? 1.0f : labelWidth;
             Vector2Control(d.label.empty() ? " " : d.label, v, d.speed, lw);
-            if (v[0] != d.fVal[0] || v[1] != d.fVal[1])
-            {
+            if (v[0] != d.fVal[0] || v[1] != d.fVal[1]) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Vec2;
@@ -1441,8 +1429,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             float v[3] = {d.fVal[0], d.fVal[1], d.fVal[2]};
             float lw = d.label.empty() ? 1.0f : labelWidth;
             Vector3Control(d.label.empty() ? " " : d.label, v, d.speed, lw);
-            if (v[0] != d.fVal[0] || v[1] != d.fVal[1] || v[2] != d.fVal[2])
-            {
+            if (v[0] != d.fVal[0] || v[1] != d.fVal[1] || v[2] != d.fVal[2]) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Vec3;
@@ -1457,8 +1444,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             float v[4] = {d.fVal[0], d.fVal[1], d.fVal[2], d.fVal[3]};
             float lw = d.label.empty() ? 1.0f : labelWidth;
             Vector4Control(d.label.empty() ? " " : d.label, v, d.speed, lw);
-            if (v[0] != d.fVal[0] || v[1] != d.fVal[1] || v[2] != d.fVal[2] || v[3] != d.fVal[3])
-            {
+            if (v[0] != d.fVal[0] || v[1] != d.fVal[1] || v[2] != d.fVal[2] || v[3] != d.fVal[3]) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Vec4;
@@ -1479,8 +1465,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
             for (const auto &s : d.enumNames)
                 cstrs.push_back(s.c_str());
             ImGui::Combo(d.widgetId.c_str(), &idx, cstrs.data(), static_cast<int>(cstrs.size()));
-            if (idx != orig)
-            {
+            if (idx != orig) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Enum;
@@ -1492,8 +1477,7 @@ std::vector<PropertyChange> InxGUIContext::RenderPropertyBatch(const std::vector
         case PropertyDesc::Color: {
             doLabel(d.label);
             float col[4] = {d.fVal[0], d.fVal[1], d.fVal[2], d.fVal[3]};
-            if (ImGui::ColorEdit4(d.widgetId.c_str(), col))
-            {
+            if (ImGui::ColorEdit4(d.widgetId.c_str(), col)) {
                 PropertyChange c;
                 c.index = i;
                 c.type = PropertyDesc::Color;
