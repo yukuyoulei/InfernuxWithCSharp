@@ -131,10 +131,16 @@ User gameplay scripts now inherit from `MonoBehaviour`.
 - `GetComponent(Type)`
 - `TryGetComponent<T>(out T? component) where T : Component`
 - `TryGetComponent(Type, out Component?)`
+- `GetComponents<T>() where T : Component`
+- `GetComponents(Type)`
 - `GetComponentInChildren<T>() where T : Component`
 - `GetComponentInChildren(Type)`
+- `GetComponentsInChildren<T>() where T : Component`
+- `GetComponentsInChildren(Type)`
 - `GetComponentInParent<T>() where T : Component`
 - `GetComponentInParent(Type)`
+- `GetComponentsInParent<T>() where T : Component`
+- `GetComponentsInParent(Type)`
 - `Destroy(GameObject?)`
 - `Destroy()`
 - `name`

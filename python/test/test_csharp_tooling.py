@@ -52,10 +52,16 @@ def test_generated_runtime_stubs_include_extended_transform_bridge(tmp_path: Pat
     assert "public Component? GetComponent(Type type)" in content
     assert "public bool TryGetComponent<T>(out T? component) where T : Component" in content
     assert "public bool TryGetComponent(Type type, out Component? component)" in content
+    assert "public T[] GetComponents<T>() where T : Component" in content
+    assert "public Component[] GetComponents(Type type)" in content
     assert "public T? GetComponentInChildren<T>() where T : Component" in content
     assert "public Component? GetComponentInChildren(Type type)" in content
+    assert "public T[] GetComponentsInChildren<T>() where T : Component" in content
+    assert "public Component[] GetComponentsInChildren(Type type)" in content
     assert "public T? GetComponentInParent<T>() where T : Component" in content
     assert "public Component? GetComponentInParent(Type type)" in content
+    assert "public T[] GetComponentsInParent<T>() where T : Component" in content
+    assert "public Component[] GetComponentsInParent(Type type)" in content
     assert "public override string name" in content
     assert "public bool CompareTag(string tag)" in content
     assert "public abstract bool enabled { get; set; }" in content
@@ -76,4 +82,13 @@ def test_generated_runtime_stubs_include_extended_transform_bridge(tmp_path: Pat
     assert "internal static T? InstantiateObject<T>(T original, Transform? parent) where T : Object" in content
     assert "internal static Component? AddGameObjectComponent(GameObject gameObject, Type type)" in content
     assert "internal static T? GetGameObjectComponent<T>(GameObject gameObject) where T : Component" in content
-    assert "if (typeof(T) == typeof(Transform))" in content
+    assert "internal static T[] GetGameObjectComponents<T>(GameObject gameObject) where T : Component" in content
+    assert "internal static Component[] GetGameObjectComponents(GameObject gameObject, Type type)" in content
+    assert "internal static T[] GetGameObjectComponentsInChildren<T>(GameObject gameObject) where T : Component" in content
+    assert "internal static Component[] GetGameObjectComponentsInChildren(GameObject gameObject, Type type)" in content
+    assert "internal static T[] GetGameObjectComponentsInParent<T>(GameObject gameObject) where T : Component" in content
+    assert "internal static Component[] GetGameObjectComponentsInParent(GameObject gameObject, Type type)" in content
+    assert "if (typeof(T).IsAssignableFrom(typeof(Transform)))" in content
+    assert "private static bool CanMatchManagedComponentType(Type type)" in content
+    assert "if (!expectedType.IsInstanceOfType(candidate))" in content
+    assert "private static void CollectComponentsOnGameObject(GameObject gameObject, Type expectedType, List<Component> results)" in content

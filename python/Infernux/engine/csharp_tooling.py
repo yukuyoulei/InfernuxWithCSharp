@@ -302,6 +302,17 @@ namespace Infernux
             return component is not null;
         }
 
+        public T[] GetComponents<T>() where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponents<T>(this);
+        }
+
+        public Component[] GetComponents(Type type)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponents(this, type);
+        }
+
         public T? GetComponentInChildren<T>() where T : Component
         {
             return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren<T>(this);
@@ -313,6 +324,17 @@ namespace Infernux
             return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren(this, type);
         }
 
+        public T[] GetComponentsInChildren<T>() where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren<T>(this);
+        }
+
+        public Component[] GetComponentsInChildren(Type type)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren(this, type);
+        }
+
         public T? GetComponentInParent<T>() where T : Component
         {
             return Managed.ManagedComponentBridge.GetGameObjectComponentInParent<T>(this);
@@ -322,6 +344,17 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return Managed.ManagedComponentBridge.GetGameObjectComponentInParent(this, type);
+        }
+
+        public T[] GetComponentsInParent<T>() where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent<T>(this);
+        }
+
+        public Component[] GetComponentsInParent(Type type)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent(this, type);
         }
 
         public static void Destroy(GameObject? target)
@@ -2226,12 +2259,24 @@ namespace Infernux.Managed
         {
             ArgumentNullException.ThrowIfNull(gameObject);
 
-            if (typeof(T) == typeof(Transform))
+            if (typeof(T).IsAssignableFrom(typeof(Transform)))
             {
                 return gameObject.transform as T;
             }
 
-            return GetManagedGameObjectComponent<T>(gameObject.InstanceId);
+            return GetManagedGameObjectComponent<T>(gameObject);
+        }
+
+        internal static T[] GetGameObjectComponents<T>(GameObject gameObject) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            Component[] components = GetGameObjectComponents(gameObject, typeof(T));
+            T[] typed = new T[components.Length];
+            for (int i = 0; i < components.Length; i++)
+            {
+                typed[i] = (T)components[i];
+            }
+            return typed;
         }
 
         internal static Component? GetGameObjectComponent(GameObject gameObject, Type type)
@@ -2239,24 +2284,58 @@ namespace Infernux.Managed
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
 
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponent(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
             if (type.IsAssignableFrom(typeof(Transform)))
             {
                 return gameObject.transform;
             }
 
-            return GetManagedGameObjectComponent(gameObject.InstanceId, type);
+            return GetManagedGameObjectComponent(gameObject, type);
+        }
+
+        internal static Component[] GetGameObjectComponents(GameObject gameObject, Type type)
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(type);
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponents(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
+            List<Component> results = new();
+            CollectComponentsOnGameObject(gameObject, type, results);
+            return results.ToArray();
         }
 
         internal static T? GetGameObjectComponentInChildren<T>(GameObject gameObject) where T : Component
         {
             ArgumentNullException.ThrowIfNull(gameObject);
 
-            if (typeof(T) == typeof(Transform))
+            if (typeof(T).IsAssignableFrom(typeof(Transform)))
             {
                 return gameObject.transform as T;
             }
 
-            return GetManagedGameObjectComponentInChildren<T>(gameObject.InstanceId);
+            return GetManagedGameObjectComponentInChildren<T>(gameObject);
+        }
+
+        internal static T[] GetGameObjectComponentsInChildren<T>(GameObject gameObject) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            Component[] components = GetGameObjectComponentsInChildren(gameObject, typeof(T));
+            T[] typed = new T[components.Length];
+            for (int i = 0; i < components.Length; i++)
+            {
+                typed[i] = (T)components[i];
+            }
+            return typed;
         }
 
         internal static Component? GetGameObjectComponentInChildren(GameObject gameObject, Type type)
@@ -2264,24 +2343,58 @@ namespace Infernux.Managed
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
 
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponentInChildren(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
             if (type.IsAssignableFrom(typeof(Transform)))
             {
                 return gameObject.transform;
             }
 
-            return GetManagedGameObjectComponentInChildren(gameObject.InstanceId, type);
+            return GetManagedGameObjectComponentInChildren(gameObject, type);
+        }
+
+        internal static Component[] GetGameObjectComponentsInChildren(GameObject gameObject, Type type)
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(type);
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponentsInChildren(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
+            List<Component> results = new();
+            CollectComponentsInChildren(gameObject, type, results);
+            return results.ToArray();
         }
 
         internal static T? GetGameObjectComponentInParent<T>(GameObject gameObject) where T : Component
         {
             ArgumentNullException.ThrowIfNull(gameObject);
 
-            if (typeof(T) == typeof(Transform))
+            if (typeof(T).IsAssignableFrom(typeof(Transform)))
             {
                 return gameObject.transform as T;
             }
 
-            return GetManagedGameObjectComponentInParent<T>(gameObject.InstanceId);
+            return GetManagedGameObjectComponentInParent<T>(gameObject);
+        }
+
+        internal static T[] GetGameObjectComponentsInParent<T>(GameObject gameObject) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            Component[] components = GetGameObjectComponentsInParent(gameObject, typeof(T));
+            T[] typed = new T[components.Length];
+            for (int i = 0; i < components.Length; i++)
+            {
+                typed[i] = (T)components[i];
+            }
+            return typed;
         }
 
         internal static Component? GetGameObjectComponentInParent(GameObject gameObject, Type type)
@@ -2289,69 +2402,88 @@ namespace Infernux.Managed
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
 
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponentInParent(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
             if (type.IsAssignableFrom(typeof(Transform)))
             {
                 return gameObject.transform;
             }
 
-            return GetManagedGameObjectComponentInParent(gameObject.InstanceId, type);
+            return GetManagedGameObjectComponentInParent(gameObject, type);
         }
 
-        private static T? GetManagedGameObjectComponent<T>(long gameObjectId) where T : Component
+        internal static Component[] GetGameObjectComponentsInParent(GameObject gameObject, Type type)
         {
-            if (!typeof(MonoBehaviour).IsAssignableFrom(typeof(T)))
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(type);
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponentsInParent(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
+            List<Component> results = new();
+            CollectComponentsInParent(gameObject, type, results);
+            return results.ToArray();
+        }
+
+        private static T? GetManagedGameObjectComponent<T>(GameObject gameObject) where T : Component
+        {
+            if (!CanMatchManagedComponentType(typeof(T)))
             {
                 throw new NotSupportedException(
                     $"GetComponent<{typeof(T).Name}> currently supports Transform or managed MonoBehaviour-derived types only.");
             }
 
-            long handle = NativeApi.GetManagedComponent(gameObjectId, GetManagedTypeNameForLookup(typeof(T)));
-            return handle != 0 ? (T?)(object)GetManagedComponent(handle, typeof(T)) : null;
+            MonoBehaviour? component = FindManagedComponentOnGameObject(gameObject.InstanceId, typeof(T));
+            return component is T typedComponent ? typedComponent : null;
         }
 
-        private static Component? GetManagedGameObjectComponent(long gameObjectId, Type type)
+        private static Component? GetManagedGameObjectComponent(GameObject gameObject, Type type)
         {
             ValidateManagedLookupType(type, nameof(type), "GetComponent(Type)");
-            long handle = NativeApi.GetManagedComponent(gameObjectId, GetManagedTypeNameForLookup(type));
-            return handle != 0 ? GetManagedComponent(handle, type) : null;
+            return FindManagedComponentOnGameObject(gameObject.InstanceId, type);
         }
 
-        private static T? GetManagedGameObjectComponentInChildren<T>(long gameObjectId) where T : Component
+        private static T? GetManagedGameObjectComponentInChildren<T>(GameObject gameObject) where T : Component
         {
-            if (!typeof(MonoBehaviour).IsAssignableFrom(typeof(T)))
+            if (!CanMatchManagedComponentType(typeof(T)))
             {
                 throw new NotSupportedException(
                     $"GetComponentInChildren<{typeof(T).Name}> currently supports Transform or managed MonoBehaviour-derived types only.");
             }
 
-            long handle = NativeApi.GetManagedComponentInChildren(gameObjectId, GetManagedTypeNameForLookup(typeof(T)));
-            return handle != 0 ? (T?)(object)GetManagedComponent(handle, typeof(T)) : null;
+            MonoBehaviour? component = FindManagedComponentInChildren(gameObject, typeof(T));
+            return component is T typedComponent ? typedComponent : null;
         }
 
-        private static Component? GetManagedGameObjectComponentInChildren(long gameObjectId, Type type)
+        private static Component? GetManagedGameObjectComponentInChildren(GameObject gameObject, Type type)
         {
             ValidateManagedLookupType(type, nameof(type), "GetComponentInChildren(Type)");
-            long handle = NativeApi.GetManagedComponentInChildren(gameObjectId, GetManagedTypeNameForLookup(type));
-            return handle != 0 ? GetManagedComponent(handle, type) : null;
+            return FindManagedComponentInChildren(gameObject, type);
         }
 
-        private static T? GetManagedGameObjectComponentInParent<T>(long gameObjectId) where T : Component
+        private static T? GetManagedGameObjectComponentInParent<T>(GameObject gameObject) where T : Component
         {
-            if (!typeof(MonoBehaviour).IsAssignableFrom(typeof(T)))
+            if (!CanMatchManagedComponentType(typeof(T)))
             {
                 throw new NotSupportedException(
                     $"GetComponentInParent<{typeof(T).Name}> currently supports Transform or managed MonoBehaviour-derived types only.");
             }
 
-            long handle = NativeApi.GetManagedComponentInParent(gameObjectId, GetManagedTypeNameForLookup(typeof(T)));
-            return handle != 0 ? (T?)(object)GetManagedComponent(handle, typeof(T)) : null;
+            MonoBehaviour? component = FindManagedComponentInParent(gameObject, typeof(T));
+            return component is T typedComponent ? typedComponent : null;
         }
 
-        private static Component? GetManagedGameObjectComponentInParent(long gameObjectId, Type type)
+        private static Component? GetManagedGameObjectComponentInParent(GameObject gameObject, Type type)
         {
             ValidateManagedLookupType(type, nameof(type), "GetComponentInParent(Type)");
-            long handle = NativeApi.GetManagedComponentInParent(gameObjectId, GetManagedTypeNameForLookup(type));
-            return handle != 0 ? GetManagedComponent(handle, type) : null;
+            return FindManagedComponentInParent(gameObject, type);
         }
 
         private static string GetManagedTypeNameForLookup(Type type)
@@ -2361,11 +2493,16 @@ namespace Infernux.Managed
 
         private static void ValidateManagedLookupType(Type type, string paramName, string apiName)
         {
-            if (!typeof(MonoBehaviour).IsAssignableFrom(type))
+            if (!CanMatchManagedComponentType(type))
             {
                 throw new ArgumentException(
                     $"{apiName} currently supports Transform or MonoBehaviour-derived types only.", paramName);
             }
+        }
+
+        private static bool CanMatchManagedComponentType(Type type)
+        {
+            return typeof(MonoBehaviour).IsAssignableFrom(type) || type.IsAssignableFrom(typeof(MonoBehaviour));
         }
 
         private static Transform InstantiateTransform(Transform transform, Transform? parent)
@@ -2389,6 +2526,120 @@ namespace Infernux.Managed
 
             Component? cloneComponent = clone.GetComponent(behaviour.GetType());
             return cloneComponent is T typedComponent ? typedComponent : null;
+        }
+
+        private static void CollectComponentsOnGameObject(GameObject gameObject, Type expectedType, List<Component> results)
+        {
+            if (expectedType.IsAssignableFrom(typeof(Transform)))
+            {
+                results.Add(gameObject.transform);
+            }
+
+            foreach (MonoBehaviour candidate in EnumerateManagedComponentsOnGameObject(gameObject.InstanceId))
+            {
+                if (expectedType.IsInstanceOfType(candidate))
+                {
+                    results.Add(candidate);
+                }
+            }
+        }
+
+        private static void CollectComponentsInChildren(GameObject gameObject, Type expectedType, List<Component> results)
+        {
+            CollectComponentsOnGameObject(gameObject, expectedType, results);
+
+            Transform root = gameObject.transform;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform? child = root.GetChild(i);
+                GameObject? childObject = child?.gameObject;
+                if (childObject is not null)
+                {
+                    CollectComponentsInChildren(childObject, expectedType, results);
+                }
+            }
+        }
+
+        private static void CollectComponentsInParent(GameObject gameObject, Type expectedType, List<Component> results)
+        {
+            for (GameObject? current = gameObject; current is not null; current = current.transform.parent?.gameObject)
+            {
+                CollectComponentsOnGameObject(current, expectedType, results);
+            }
+        }
+
+        private static IEnumerable<MonoBehaviour> EnumerateManagedComponentsOnGameObject(long gameObjectId)
+        {
+            List<MonoBehaviour> matches = new();
+            foreach (MonoBehaviour candidate in Components.Values)
+            {
+                if (candidate.GameObjectId == gameObjectId)
+                {
+                    matches.Add(candidate);
+                }
+            }
+
+            matches.Sort(static (left, right) =>
+            {
+                long leftId = left.ComponentId != 0 ? left.ComponentId : long.MaxValue;
+                long rightId = right.ComponentId != 0 ? right.ComponentId : long.MaxValue;
+                return leftId.CompareTo(rightId);
+            });
+            return matches;
+        }
+
+        private static MonoBehaviour? FindManagedComponentOnGameObject(long gameObjectId, Type expectedType)
+        {
+            foreach (MonoBehaviour candidate in EnumerateManagedComponentsOnGameObject(gameObjectId))
+            {
+                if (expectedType.IsInstanceOfType(candidate))
+                {
+                    return candidate;
+                }
+            }
+            return null;
+        }
+
+        private static MonoBehaviour? FindManagedComponentInChildren(GameObject gameObject, Type expectedType)
+        {
+            MonoBehaviour? self = FindManagedComponentOnGameObject(gameObject.InstanceId, expectedType);
+            if (self is not null)
+            {
+                return self;
+            }
+
+            Transform root = gameObject.transform;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform? child = root.GetChild(i);
+                GameObject? childObject = child?.gameObject;
+                if (childObject is null)
+                {
+                    continue;
+                }
+
+                MonoBehaviour? nested = FindManagedComponentInChildren(childObject, expectedType);
+                if (nested is not null)
+                {
+                    return nested;
+                }
+            }
+
+            return null;
+        }
+
+        private static MonoBehaviour? FindManagedComponentInParent(GameObject gameObject, Type expectedType)
+        {
+            for (GameObject? current = gameObject; current is not null; current = current.transform.parent?.gameObject)
+            {
+                MonoBehaviour? match = FindManagedComponentOnGameObject(current.InstanceId, expectedType);
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+
+            return null;
         }
 
         private static MonoBehaviour GetManagedComponent(long handle, Type expectedType)
