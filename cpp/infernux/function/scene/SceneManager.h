@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace infernux
@@ -102,6 +103,14 @@ class SceneManager
 
     /// @brief Process pending destroys at end of frame
     void EndFrame();
+
+    /// @brief Manually flush Transform changes to the physics engine.
+    /// Unity equivalent: Physics.SyncTransforms().
+    /// Useful when script code modifies transforms in Update and needs
+    /// immediate physics queries (raycast, overlap) against the new positions.
+    /// Normally called automatically before each physics step; calling it
+    /// explicitly is only needed for same-frame queries after transform edits.
+    void SyncTransforms();
 
     [[nodiscard]] const FrameProfile &GetLastFrameProfile() const
     {
@@ -204,6 +213,9 @@ class SceneManager
     /// Clear MeshRenderer registry (called on scene unload / deserialize).
     void ClearComponentRegistries();
 
+    /// Pre-allocate MeshRenderer registry storage for bulk creation.
+    void ReserveRendererCapacity(size_t count);
+
     /// Register a MeshRenderer so rendering can iterate it directly.
     void RegisterMeshRenderer(MeshRenderer *renderer);
 
@@ -214,6 +226,12 @@ class SceneManager
     [[nodiscard]] const std::vector<MeshRenderer *> &GetActiveMeshRenderers() const
     {
         return m_activeMeshRenderers;
+    }
+
+    /// Monotonic counter bumped when a MeshRenderer is registered/unregistered.
+    [[nodiscard]] uint64_t GetMeshRendererVersion() const
+    {
+        return m_meshRendererVersion;
     }
 
     /// Mark all MeshRenderers referencing a given mesh GUID as buffer-dirty.
@@ -236,7 +254,12 @@ class SceneManager
     ~SceneManager() = default;
 
     /// Walk all colliders in the active scene and sync transforms to Jolt.
+    /// Uses a global transform serial to skip entirely when no transforms changed.
     void SyncCollidersToPhysics();
+
+    /// Flush pending broadphase additions (batched from Collider::AddToBroadphase).
+    /// Also rebuilds the BVH tree when new bodies were added.
+    void FlushPendingBroadphase();
 
     /// Force-sync ALL collider body positions to their current Transform,
     /// including dynamic bodies (which SyncCollidersToPhysics normally skips).
@@ -280,10 +303,17 @@ class SceneManager
     // MeshRenderer component registry — populated by MeshRenderer OnEnable/OnDisable.
     // Avoids per-frame GetAllObjects() + dynamic_cast in CollectRenderables.
     std::vector<MeshRenderer *> m_activeMeshRenderers;
+    std::unordered_set<MeshRenderer *> m_activeMeshRendererSet; // O(1) duplicate check
+    uint64_t m_meshRendererVersion = 0;
 
     // Light component registry — populated by Light OnEnable/OnDisable.
     // Avoids per-frame GetAllObjects() + GetComponent<Light>() in CollectLights/ComputeShadowVP.
     std::vector<Light *> m_activeLights;
+
+    // ── Physics sync state (Unity-style deferred transform sync) ─────
+    /// Cached TransformECSStore global serial at last SyncCollidersToPhysics.
+    /// When the store serial hasn't changed, the entire sync is skipped.
+    uint64_t m_lastPhysicsSyncTransformSerial = 0;
 
     FrameProfile m_lastFrameProfile;
 };

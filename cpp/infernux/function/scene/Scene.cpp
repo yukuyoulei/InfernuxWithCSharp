@@ -9,6 +9,7 @@
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <platform/filesystem/InxPath.h>
 
 using json = nlohmann::json;
@@ -33,6 +34,14 @@ GameObject *Scene::CreateGameObject(const std::string &name)
     ++m_structureVersion;
 
     return ptr;
+}
+
+void Scene::ReserveCapacity(size_t count)
+{
+    m_rootObjects.reserve(m_rootObjects.size() + count);
+    m_objectsById.reserve(m_objectsById.size() + count);
+    // Each GO gets ~2-3 components that queue for Start()
+    m_pendingStartComponentIds.reserve(m_pendingStartComponentIds.size() + count * 3);
 }
 
 void Scene::AddGameObject(std::unique_ptr<GameObject> gameObject)
@@ -532,8 +541,7 @@ void Scene::QueueComponentStart(Component *component)
     if (id == 0)
         return;
 
-    if (std::find(m_pendingStartComponentIds.begin(), m_pendingStartComponentIds.end(), id) ==
-        m_pendingStartComponentIds.end()) {
+    if (m_pendingStartComponentIdSet.insert(id).second) {
         m_pendingStartComponentIds.push_back(id);
     }
 }
@@ -545,21 +553,30 @@ void Scene::ProcessPendingStarts()
 
     std::vector<uint64_t> pending;
     pending.swap(m_pendingStartComponentIds);
+    m_pendingStartComponentIdSet.clear();
 
-    std::stable_sort(pending.begin(), pending.end(), [this](uint64_t lhs, uint64_t rhs) {
-        Component *a = FindComponentByID(lhs);
-        Component *b = FindComponentByID(rhs);
-        if (!a || !b) {
-            return lhs < rhs;
-        }
-        if (a->GetExecutionOrder() != b->GetExecutionOrder()) {
+    // Build a component-pointer cache so the sort and dispatch each do O(1) lookups.
+    std::vector<Component *> comps;
+    comps.reserve(pending.size());
+    for (uint64_t id : pending) {
+        comps.push_back(Component::FindByComponentId(id));
+    }
+
+    // Stable-sort by execution order, then by component ID.
+    std::vector<size_t> indices(pending.size());
+    std::iota(indices.begin(), indices.end(), size_t(0));
+    std::stable_sort(indices.begin(), indices.end(), [&](size_t i, size_t j) {
+        Component *a = comps[i];
+        Component *b = comps[j];
+        if (!a || !b)
+            return pending[i] < pending[j];
+        if (a->GetExecutionOrder() != b->GetExecutionOrder())
             return a->GetExecutionOrder() < b->GetExecutionOrder();
-        }
         return a->GetComponentID() < b->GetComponentID();
     });
 
-    for (uint64_t id : pending) {
-        Component *component = FindComponentByID(id);
+    for (size_t idx : indices) {
+        Component *component = comps[idx];
         if (!component)
             continue;
 
@@ -599,18 +616,7 @@ Component *Scene::FindComponentByID(uint64_t componentId) const
     if (componentId == 0)
         return nullptr;
 
-    std::vector<GameObject *> objects = GetAllObjects();
-    for (GameObject *obj : objects) {
-        if (!obj)
-            continue;
-
-        for (const auto &comp : obj->GetAllComponents()) {
-            if (comp && comp->GetComponentID() == componentId) {
-                return comp.get();
-            }
-        }
-    }
-    return nullptr;
+    return Component::FindByComponentId(componentId);
 }
 
 // ============================================================================

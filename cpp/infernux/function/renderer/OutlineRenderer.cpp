@@ -33,7 +33,10 @@ namespace
 constexpr uint32_t kOutlineSceneUBOBinding = 0;
 constexpr uint32_t kOutlineVertexMaterialUBOBinding = 14;
 
+using infernux::vkrender::MakeMultisampleState;
 using infernux::vkrender::MakeShaderStageInfo;
+using infernux::vkrender::MakeTriangleListInputAssembly;
+using DynamicViewportState = infernux::vkrender::DynamicViewportScissorState;
 
 struct MeshVertexInputState
 {
@@ -50,32 +53,6 @@ struct MeshVertexInputState
         createInfo.pVertexAttributeDescriptions = attrDescs.data();
     }
 };
-
-struct DynamicViewportState
-{
-    std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    VkPipelineViewportStateCreateInfo viewportState{};
-
-    DynamicViewportState()
-    {
-        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-        dynamicState.pDynamicStates = dynamicStates.data();
-
-        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        viewportState.viewportCount = 1;
-        viewportState.scissorCount = 1;
-    }
-};
-
-VkPipelineInputAssemblyStateCreateInfo MakeTriangleListInputAssembly()
-{
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    return inputAssembly;
-}
 
 VkPipelineRasterizationStateCreateInfo MakeRasterizationState(VkCullModeFlags cullMode)
 {
@@ -95,14 +72,6 @@ VkPipelineDepthStencilStateCreateInfo MakeDepthStencilState(VkBool32 depthTestEn
     depthStencil.depthTestEnable = depthTestEnable;
     depthStencil.depthWriteEnable = depthWriteEnable;
     return depthStencil;
-}
-
-VkPipelineMultisampleStateCreateInfo MakeMultisampleState(VkSampleCountFlagBits sampleCount)
-{
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = sampleCount;
-    return multisampling;
 }
 
 VkPipelineColorBlendAttachmentState MakeOpaqueColorBlendAttachment()
@@ -903,8 +872,8 @@ void OutlineRenderer::RenderOutlineMask(VkCommandBuffer cmdBuf, const std::vecto
         if (dc.material) {
             ShaderProgram *fwdProgram = dc.material->GetPassShaderProgram(ShaderCompileTarget::Forward);
             if (fwdProgram && fwdProgram->HasVertexMaterialUBO()) {
-                VkPipeline mtlPipeline = GetOrCreateMtlOutlinePipeline(dc.material.get());
-                VkDescriptorSet mtlDescSet = GetOrCreateMtlOutlineDescSet(dc.material.get());
+                VkPipeline mtlPipeline = GetOrCreateMtlOutlinePipeline(dc.material);
+                VkDescriptorSet mtlDescSet = GetOrCreateMtlOutlineDescSet(dc.material);
 
                 if (mtlPipeline != VK_NULL_HANDLE && mtlDescSet != VK_NULL_HANDLE) {
                     // Write the object's world transform to the per-frame instance buffer

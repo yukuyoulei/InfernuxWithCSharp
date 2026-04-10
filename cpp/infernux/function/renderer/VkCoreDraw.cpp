@@ -148,6 +148,11 @@ void InxVkCoreModular::SetDrawCalls(const std::vector<DrawCall> *drawCalls)
     }
 }
 
+void InxVkCoreModular::SetShadowDrawCalls(const std::vector<DrawCall> *drawCalls)
+{
+    m_shadowDrawCallsPtr = drawCalls;
+}
+
 // ============================================================================
 // Multi-camera UBO update via command buffer
 // ============================================================================
@@ -271,10 +276,14 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
     }
 
     // Resolve override material (if specified)
-    std::shared_ptr<InxMaterial> overrideMat = nullptr;
+    InxMaterial *overrideMatRaw = nullptr;
+    std::shared_ptr<InxMaterial> overrideMatOwner; // keeps alive during this scope
     if (!overrideMaterial.empty()) {
-        overrideMat = AssetRegistry::Instance().GetBuiltinMaterial(overrideMaterial);
+        overrideMatOwner = AssetRegistry::Instance().GetBuiltinMaterial(overrideMaterial);
+        overrideMatRaw = overrideMatOwner.get();
     }
+
+    InxMaterial *defaultMatRaw = defaultMaterial.get();
 
     // ---- Collect eligible draw calls (queue filter + frustum cull) ----
     m_eligibleScratch.clear();
@@ -283,7 +292,7 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
         if (!dc.frustumVisible)
             continue;
 
-        auto material = overrideMat ? overrideMat : (dc.material ? dc.material : defaultMaterial);
+        InxMaterial *material = overrideMatRaw ? overrideMatRaw : (dc.material ? dc.material : defaultMatRaw);
         if (!material)
             continue;
 
@@ -304,13 +313,13 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
         float sortKey = viewPos.z;
 
         // Material + mesh hash for grouping optimization
-        size_t matHash = std::hash<void *>{}(material.get());
+        size_t matHash = std::hash<void *>{}(static_cast<void *>(material));
         auto bufIt = m_perObjectBuffers.find(dc.objectId);
         VkBuffer vb = VK_NULL_HANDLE;
         if (bufIt != m_perObjectBuffers.end() && bufIt->second.vertexBuffer)
             vb = bufIt->second.vertexBuffer->GetBuffer();
 
-        m_eligibleScratch.push_back({&dc, sortKey, matHash, vb, std::move(material), bufIt});
+        m_eligibleScratch.push_back({&dc, sortKey, matHash, vb, material, bufIt});
     }
 
     // Diagnostic: log per-call eligible count with queue range
@@ -360,33 +369,37 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
     }
 
     // ---- Sort if requested (skip for 0-1 elements) ----
+    // is_sorted() early-out: O(N) comparison-only scan avoids the O(N log N)
+    // std::sort when the eligible scratch is already in correct order from
+    // a previous frame (common in stable scenes with static camera).
     if (m_eligibleScratch.size() > 1) {
         // In left-handed view space: near objects have small positive Z, far
         // objects have larger positive Z.
         if (sortMode == "front_to_back") {
-            // Front-to-back: group by material first (minimizes state changes),
-            // then sort by depth within each material group.
-            std::sort(m_eligibleScratch.begin(), m_eligibleScratch.end(),
-                      [](const SortableDrawCall &a, const SortableDrawCall &b) {
-                          if (a.materialHash != b.materialHash)
-                              return a.materialHash < b.materialHash;
-                          if (a.vertexBuf != b.vertexBuf)
-                              return a.vertexBuf < b.vertexBuf;
-                          return a.sortKey < b.sortKey;
-                      });
+            auto cmp = [](const SortableDrawCall &a, const SortableDrawCall &b) {
+                if (a.materialHash != b.materialHash)
+                    return a.materialHash < b.materialHash;
+                if (a.vertexBuf != b.vertexBuf)
+                    return a.vertexBuf < b.vertexBuf;
+                return a.sortKey < b.sortKey;
+            };
+            if (!std::is_sorted(m_eligibleScratch.begin(), m_eligibleScratch.end(), cmp)) {
+                std::sort(m_eligibleScratch.begin(), m_eligibleScratch.end(), cmp);
+            }
         } else if (sortMode == "back_to_front") {
-            // Far first → descending Z.
-            // Depth order is critical for correct alpha blending.
-            std::sort(m_eligibleScratch.begin(), m_eligibleScratch.end(),
-                      [](const SortableDrawCall &a, const SortableDrawCall &b) { return a.sortKey > b.sortKey; });
+            auto cmp = [](const SortableDrawCall &a, const SortableDrawCall &b) { return a.sortKey > b.sortKey; };
+            if (!std::is_sorted(m_eligibleScratch.begin(), m_eligibleScratch.end(), cmp)) {
+                std::sort(m_eligibleScratch.begin(), m_eligibleScratch.end(), cmp);
+            }
         } else {
-            // No explicit sort requested — group by material + mesh for max state reuse
-            std::sort(m_eligibleScratch.begin(), m_eligibleScratch.end(),
-                      [](const SortableDrawCall &a, const SortableDrawCall &b) {
-                          if (a.materialHash != b.materialHash)
-                              return a.materialHash < b.materialHash;
-                          return a.vertexBuf < b.vertexBuf;
-                      });
+            auto cmp = [](const SortableDrawCall &a, const SortableDrawCall &b) {
+                if (a.materialHash != b.materialHash)
+                    return a.materialHash < b.materialHash;
+                return a.vertexBuf < b.vertexBuf;
+            };
+            if (!std::is_sorted(m_eligibleScratch.begin(), m_eligibleScratch.end(), cmp)) {
+                std::sort(m_eligibleScratch.begin(), m_eligibleScratch.end(), cmp);
+            }
         }
     } // size() > 1
 
@@ -411,13 +424,16 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
         EnsureInstanceBufferCapacity(frameIndex, writeBase + totalEligible);
         auto &instFrame = m_instanceBuffers[frameIndex];
         if (instFrame.buffer) {
-            void *mapped = instFrame.buffer->Map();
+            void *mapped = instFrame.mapped;
+            if (!mapped) {
+                mapped = instFrame.buffer->Map();
+                instFrame.mapped = mapped;
+            }
             if (mapped) {
                 glm::mat4 *matrices = static_cast<glm::mat4 *>(mapped);
                 for (size_t i = 0; i < totalEligible; ++i) {
                     matrices[writeBase + i] = m_eligibleScratch[i].dc->worldMatrix;
                 }
-                instFrame.buffer->Unmap();
             }
         }
         m_instanceWriteOffset += static_cast<uint32_t>(totalEligible);
@@ -470,8 +486,7 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
         const DrawCall &dc = *entry.dc;
 
         // Material already resolved in filter loop — use directly
-        const auto &material = entry.material;
-        InxMaterial *matRaw = material.get();
+        InxMaterial *matRaw = entry.material;
 
         VkPipeline pipeline = matRaw->GetPassPipeline(ShaderCompileTarget::Forward);
         VkPipelineLayout pipelineLayout = matRaw->GetPassPipelineLayout(ShaderCompileTarget::Forward);
@@ -485,8 +500,10 @@ void InxVkCoreModular::DrawSceneFiltered(VkCommandBuffer cmdBuf, uint32_t width,
         if (pipeline == VK_NULL_HANDLE) {
             const std::string &vertName = matRaw->GetVertShaderName();
             const std::string &fragName = matRaw->GetFragShaderName();
+            // Non-owning shared_ptr for legacy RefreshMaterialPipeline API (rare path)
+            auto matShared = std::shared_ptr<InxMaterial>(matRaw, [](InxMaterial *) {});
             if (!fragName.empty()) {
-                RefreshMaterialPipeline(material, vertName, fragName);
+                RefreshMaterialPipeline(matShared, vertName, fragName);
                 pipeline = matRaw->GetPassPipeline(ShaderCompileTarget::Forward);
                 pipelineLayout = matRaw->GetPassPipelineLayout(ShaderCompileTarget::Forward);
             }
@@ -673,8 +690,8 @@ void InxVkCoreModular::DrawShadowCasters(VkCommandBuffer cmdBuf, uint32_t width,
 
     // Pre-build draw list (filter once, reuse for all cascades)
     m_shadowDrawScratch.clear();
-    m_shadowDrawScratch.reserve(drawCalls().size());
-    for (const DrawCall &dc : drawCalls()) {
+    m_shadowDrawScratch.reserve(shadowDrawCalls().size());
+    for (const DrawCall &dc : shadowDrawCalls()) {
         if (!dc.material)
             continue;
         int renderQueue = dc.material->GetRenderQueue();
@@ -687,8 +704,8 @@ void InxVkCoreModular::DrawShadowCasters(VkCommandBuffer cmdBuf, uint32_t width,
         VkPipeline pip = dc.material->GetPassPipeline(ShaderCompileTarget::Shadow);
         if (pip == VK_NULL_HANDLE) {
             // Lazy creation: shadow shared resources are ready, create per-material pipeline now
-            CreateMaterialShadowPipeline(dc.material, dc.material->GetVertShaderName(),
-                                         dc.material->GetFragShaderName());
+            auto matShared = std::shared_ptr<InxMaterial>(dc.material, [](InxMaterial *) {});
+            CreateMaterialShadowPipeline(matShared, dc.material->GetVertShaderName(), dc.material->GetFragShaderName());
             pip = dc.material->GetPassPipeline(ShaderCompileTarget::Shadow);
         }
         if (pip == VK_NULL_HANDLE)
@@ -705,8 +722,6 @@ void InxVkCoreModular::DrawShadowCasters(VkCommandBuffer cmdBuf, uint32_t width,
 #endif
 
     if (m_shadowDrawScratch.empty()) {
-        static int s_noShadowDrawsWarnCount = 0;
-
 #if INFERNUX_FRAME_PROFILE
         m_drawSubMs[12] += std::chrono::duration<double, std::milli>(Clock::now() - totalStart).count();
 #endif
@@ -812,12 +827,17 @@ void InxVkCoreModular::DrawShadowCasters(VkCommandBuffer cmdBuf, uint32_t width,
         EnsureInstanceBufferCapacity(frameIndex, writeBase + visibleCount);
 
         auto &instFrame = m_instanceBuffers[frameIndex];
-        void *mapped = instFrame.buffer->Map();
+        void *mapped = instFrame.mapped;
+        if (!mapped) {
+            mapped = instFrame.buffer->Map();
+            instFrame.mapped = mapped;
+        }
+        if (!mapped)
+            continue;
         glm::mat4 *matrices = static_cast<glm::mat4 *>(mapped);
         for (uint32_t vi = 0; vi < visibleCount; ++vi) {
             matrices[writeBase + vi] = m_shadowDrawScratch[m_shadowCascadeVisible[vi]].dc->worldMatrix;
         }
-        instFrame.buffer->Unmap();
         m_instanceWriteOffset += visibleCount;
 
 #if INFERNUX_FRAME_PROFILE
@@ -1259,8 +1279,15 @@ void InxVkCoreModular::EnsureObjectBuffers(uint64_t objectId, const std::vector<
     }
 
     auto sharedIt = m_sharedMeshBuffers.find(sharedKey);
+    // NOTE: forceUpdate is intentionally NOT included in needsCreate.
+    // The content hash already guarantees correctness — if the hash matches
+    // an existing shared buffer, the GPU data is identical regardless of
+    // forceUpdate.  Including forceUpdate here caused a catastrophic bug:
+    // when the Scene view opened and ConsumeMeshBufferDirty() returned true
+    // for all objects, each object would create its own VkBuffer (replacing
+    // the shared entry), permanently destroying instancing (4 → 6000+ draws).
     const bool needsCreate =
-        (sharedIt == m_sharedMeshBuffers.end() || forceUpdate || sharedIt->second.vertexCount != vertices.size() ||
+        (sharedIt == m_sharedMeshBuffers.end() || sharedIt->second.vertexCount != vertices.size() ||
          sharedIt->second.indexCount != indices.size() || !sharedIt->second.vertexBuffer ||
          !sharedIt->second.indexBuffer);
 
@@ -1317,8 +1344,11 @@ void InxVkCoreModular::CleanupUnusedBuffers(const std::vector<DrawCall> &activeD
     for (const auto &dc : activeDrawCalls) {
         activeIds.insert(dc.objectId);
     }
+    CleanupUnusedBuffersByIds(activeIds);
+}
 
-    // Remove buffers for objects no longer in the scene.
+void InxVkCoreModular::CleanupUnusedBuffersByIds(const std::unordered_set<uint64_t> &activeIds)
+{ // Remove buffers for objects no longer in the scene.
     // Actual GPU resource destruction is deferred via FrameDeletionQueue
     // so that in-flight command buffers are never invalidated.
     for (auto it = m_perObjectBuffers.begin(); it != m_perObjectBuffers.end();) {
@@ -1347,6 +1377,46 @@ void InxVkCoreModular::CleanupUnusedBuffers(const std::vector<DrawCall> &activeD
             ++it;
         }
     }
+}
+
+size_t InxVkCoreModular::CleanupUnusedBuffersByFrameStamp()
+{
+    // Remove objects that were not referenced by EnsureObjectBuffers on this frame.
+    bool anyRemoved = false;
+    for (auto it = m_perObjectBuffers.begin(); it != m_perObjectBuffers.end();) {
+        if (it->second.ensuredOnFrame != m_ensureFrameCounter) {
+            it = m_perObjectBuffers.erase(it);
+            anyRemoved = true;
+        } else {
+            ++it;
+        }
+    }
+
+    // Only rebuild the active-shared-keys set and prune shared buffers when
+    // at least one per-object entry was removed.  In a stable scene (no adds/removes)
+    // this skips building a 10k-element unordered_set every frame.
+    if (anyRemoved) {
+        std::unordered_set<SharedMeshKey, SharedMeshKeyHash> activeSharedKeysFromObjects;
+        activeSharedKeysFromObjects.reserve(m_perObjectBuffers.size());
+        for (const auto &kv : m_perObjectBuffers) {
+            activeSharedKeysFromObjects.insert(kv.second.sharedKey);
+        }
+
+        for (auto it = m_sharedMeshBuffers.begin(); it != m_sharedMeshBuffers.end();) {
+            if (activeSharedKeysFromObjects.find(it->first) == activeSharedKeysFromObjects.end()) {
+                auto buffers = std::make_shared<SharedMeshBuffers>(std::move(it->second));
+                m_deletionQueue.Push([buffers]() mutable {
+                    buffers->vertexBuffer.reset();
+                    buffers->indexBuffer.reset();
+                });
+                it = m_sharedMeshBuffers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    return m_perObjectBuffers.size();
 }
 
 // ============================================================================

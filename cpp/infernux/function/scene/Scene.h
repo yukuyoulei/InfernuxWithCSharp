@@ -53,6 +53,9 @@ class Scene
     /// @brief Create a new empty GameObject in this scene
     GameObject *CreateGameObject(const std::string &name = "GameObject");
 
+    /// @brief Pre-allocate capacity for root objects, id map, and pending-start queue
+    void ReserveCapacity(size_t count);
+
     /// @brief Add an existing GameObject to this scene (takes ownership)
     void AddGameObject(std::unique_ptr<GameObject> gameObject);
 
@@ -324,6 +327,7 @@ class Scene
 
     // Components pending first Start() (stored by stable component ID)
     std::vector<uint64_t> m_pendingStartComponentIds;
+    std::unordered_set<uint64_t> m_pendingStartComponentIdSet; // O(1) dedup
 
     // Python components pending recreation after deserialize
     std::vector<PendingPyComponent> m_pendingPyComponents;

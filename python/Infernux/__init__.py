@@ -32,6 +32,7 @@ from Infernux.coroutine import (
     WaitUntil,
     WaitWhile,
 )
+from Infernux.batch import batch_read, batch_write, create_batch_handle
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -108,5 +109,7 @@ __all__ = _dedupe(
         "WaitForFixedUpdate",
         "WaitUntil",
         "WaitWhile",
+        "batch_read",
+        "batch_write",
     ]
 )
