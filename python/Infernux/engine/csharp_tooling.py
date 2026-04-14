@@ -236,6 +236,13 @@ namespace Infernux
             return gameObject?.GetComponents<T>() ?? Array.Empty<T>();
         }
 
+        public void GetComponents<T>(List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(results);
+            results.Clear();
+            results.AddRange(GetComponents<T>());
+        }
+
         public Component[] GetComponents(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
@@ -244,46 +251,114 @@ namespace Infernux
 
         public T? GetComponentInChildren<T>() where T : Component
         {
-            return gameObject?.GetComponentInChildren<T>();
+            return GetComponentInChildren<T>(false);
+        }
+
+        public T? GetComponentInChildren<T>(bool includeInactive) where T : Component
+        {
+            return gameObject?.GetComponentInChildren<T>(includeInactive);
         }
 
         public Component? GetComponentInChildren(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return gameObject?.GetComponentInChildren(type);
+            return GetComponentInChildren(type, false);
+        }
+
+        public Component? GetComponentInChildren(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return gameObject?.GetComponentInChildren(type, includeInactive);
         }
 
         public T[] GetComponentsInChildren<T>() where T : Component
         {
-            return gameObject?.GetComponentsInChildren<T>() ?? Array.Empty<T>();
+            return GetComponentsInChildren<T>(false);
+        }
+
+        public T[] GetComponentsInChildren<T>(bool includeInactive) where T : Component
+        {
+            return gameObject?.GetComponentsInChildren<T>(includeInactive) ?? Array.Empty<T>();
+        }
+
+        public void GetComponentsInChildren<T>(List<T> results) where T : Component
+        {
+            GetComponentsInChildren(false, results);
+        }
+
+        public void GetComponentsInChildren<T>(bool includeInactive, List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(results);
+            results.Clear();
+            results.AddRange(GetComponentsInChildren<T>(includeInactive));
         }
 
         public Component[] GetComponentsInChildren(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return gameObject?.GetComponentsInChildren(type) ?? Array.Empty<Component>();
+            return GetComponentsInChildren(type, false);
+        }
+
+        public Component[] GetComponentsInChildren(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return gameObject?.GetComponentsInChildren(type, includeInactive) ?? Array.Empty<Component>();
         }
 
         public T? GetComponentInParent<T>() where T : Component
         {
-            return gameObject?.GetComponentInParent<T>();
+            return GetComponentInParent<T>(false);
+        }
+
+        public T? GetComponentInParent<T>(bool includeInactive) where T : Component
+        {
+            return gameObject?.GetComponentInParent<T>(includeInactive);
         }
 
         public Component? GetComponentInParent(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return gameObject?.GetComponentInParent(type);
+            return GetComponentInParent(type, false);
+        }
+
+        public Component? GetComponentInParent(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return gameObject?.GetComponentInParent(type, includeInactive);
         }
 
         public T[] GetComponentsInParent<T>() where T : Component
         {
-            return gameObject?.GetComponentsInParent<T>() ?? Array.Empty<T>();
+            return GetComponentsInParent<T>(false);
+        }
+
+        public T[] GetComponentsInParent<T>(bool includeInactive) where T : Component
+        {
+            return gameObject?.GetComponentsInParent<T>(includeInactive) ?? Array.Empty<T>();
+        }
+
+        public void GetComponentsInParent<T>(List<T> results) where T : Component
+        {
+            GetComponentsInParent(false, results);
+        }
+
+        public void GetComponentsInParent<T>(bool includeInactive, List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(results);
+            results.Clear();
+            results.AddRange(GetComponentsInParent<T>(includeInactive));
         }
 
         public Component[] GetComponentsInParent(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return gameObject?.GetComponentsInParent(type) ?? Array.Empty<Component>();
+            return GetComponentsInParent(type, false);
+        }
+
+        public Component[] GetComponentsInParent(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return gameObject?.GetComponentsInParent(type, includeInactive) ?? Array.Empty<Component>();
         }
     }
 
@@ -396,6 +471,13 @@ namespace Infernux
             return Managed.ManagedComponentBridge.GetGameObjectComponents<T>(this);
         }
 
+        public void GetComponents<T>(List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(results);
+            results.Clear();
+            results.AddRange(GetComponents<T>());
+        }
+
         public Component[] GetComponents(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
@@ -404,46 +486,114 @@ namespace Infernux
 
         public T? GetComponentInChildren<T>() where T : Component
         {
-            return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren<T>(this);
+            return GetComponentInChildren<T>(false);
+        }
+
+        public T? GetComponentInChildren<T>(bool includeInactive) where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren<T>(this, includeInactive);
         }
 
         public Component? GetComponentInChildren(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren(this, type);
+            return GetComponentInChildren(type, false);
+        }
+
+        public Component? GetComponentInChildren(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren(this, type, includeInactive);
         }
 
         public T[] GetComponentsInChildren<T>() where T : Component
         {
-            return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren<T>(this);
+            return GetComponentsInChildren<T>(false);
+        }
+
+        public T[] GetComponentsInChildren<T>(bool includeInactive) where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren<T>(this, includeInactive);
+        }
+
+        public void GetComponentsInChildren<T>(List<T> results) where T : Component
+        {
+            GetComponentsInChildren(false, results);
+        }
+
+        public void GetComponentsInChildren<T>(bool includeInactive, List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(results);
+            results.Clear();
+            results.AddRange(GetComponentsInChildren<T>(includeInactive));
         }
 
         public Component[] GetComponentsInChildren(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren(this, type);
+            return GetComponentsInChildren(type, false);
+        }
+
+        public Component[] GetComponentsInChildren(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren(this, type, includeInactive);
         }
 
         public T? GetComponentInParent<T>() where T : Component
         {
-            return Managed.ManagedComponentBridge.GetGameObjectComponentInParent<T>(this);
+            return GetComponentInParent<T>(false);
+        }
+
+        public T? GetComponentInParent<T>(bool includeInactive) where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponentInParent<T>(this, includeInactive);
         }
 
         public Component? GetComponentInParent(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return Managed.ManagedComponentBridge.GetGameObjectComponentInParent(this, type);
+            return GetComponentInParent(type, false);
+        }
+
+        public Component? GetComponentInParent(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponentInParent(this, type, includeInactive);
         }
 
         public T[] GetComponentsInParent<T>() where T : Component
         {
-            return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent<T>(this);
+            return GetComponentsInParent<T>(false);
+        }
+
+        public T[] GetComponentsInParent<T>(bool includeInactive) where T : Component
+        {
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent<T>(this, includeInactive);
+        }
+
+        public void GetComponentsInParent<T>(List<T> results) where T : Component
+        {
+            GetComponentsInParent(false, results);
+        }
+
+        public void GetComponentsInParent<T>(bool includeInactive, List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(results);
+            results.Clear();
+            results.AddRange(GetComponentsInParent<T>(includeInactive));
         }
 
         public Component[] GetComponentsInParent(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
-            return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent(this, type);
+            return GetComponentsInParent(type, false);
+        }
+
+        public Component[] GetComponentsInParent(Type type, bool includeInactive)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent(this, type, includeInactive);
         }
 
         public static void Destroy(GameObject? target)
@@ -2405,6 +2555,11 @@ namespace Infernux.Managed
 
         internal static T? GetGameObjectComponentInChildren<T>(GameObject gameObject) where T : Component
         {
+            return GetGameObjectComponentInChildren<T>(gameObject, false);
+        }
+
+        internal static T? GetGameObjectComponentInChildren<T>(GameObject gameObject, bool includeInactive) where T : Component
+        {
             ArgumentNullException.ThrowIfNull(gameObject);
 
             if (typeof(T).IsAssignableFrom(typeof(Transform)))
@@ -2412,13 +2567,18 @@ namespace Infernux.Managed
                 return gameObject.transform as T;
             }
 
-            return GetManagedGameObjectComponentInChildren<T>(gameObject);
+            return GetManagedGameObjectComponentInChildren<T>(gameObject, includeInactive);
         }
 
         internal static T[] GetGameObjectComponentsInChildren<T>(GameObject gameObject) where T : Component
         {
+            return GetGameObjectComponentsInChildren<T>(gameObject, false);
+        }
+
+        internal static T[] GetGameObjectComponentsInChildren<T>(GameObject gameObject, bool includeInactive) where T : Component
+        {
             ArgumentNullException.ThrowIfNull(gameObject);
-            Component[] components = GetGameObjectComponentsInChildren(gameObject, typeof(T));
+            Component[] components = GetGameObjectComponentsInChildren(gameObject, typeof(T), includeInactive);
             T[] typed = new T[components.Length];
             for (int i = 0; i < components.Length; i++)
             {
@@ -2428,6 +2588,11 @@ namespace Infernux.Managed
         }
 
         internal static Component? GetGameObjectComponentInChildren(GameObject gameObject, Type type)
+        {
+            return GetGameObjectComponentInChildren(gameObject, type, false);
+        }
+
+        internal static Component? GetGameObjectComponentInChildren(GameObject gameObject, Type type, bool includeInactive)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
@@ -2443,10 +2608,15 @@ namespace Infernux.Managed
                 return gameObject.transform;
             }
 
-            return GetManagedGameObjectComponentInChildren(gameObject, type);
+            return GetManagedGameObjectComponentInChildren(gameObject, type, includeInactive);
         }
 
         internal static Component[] GetGameObjectComponentsInChildren(GameObject gameObject, Type type)
+        {
+            return GetGameObjectComponentsInChildren(gameObject, type, false);
+        }
+
+        internal static Component[] GetGameObjectComponentsInChildren(GameObject gameObject, Type type, bool includeInactive)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
@@ -2458,11 +2628,16 @@ namespace Infernux.Managed
             }
 
             List<Component> results = new();
-            CollectComponentsInChildren(gameObject, type, results);
+            CollectComponentsInChildren(gameObject, type, includeInactive, true, results);
             return results.ToArray();
         }
 
         internal static T? GetGameObjectComponentInParent<T>(GameObject gameObject) where T : Component
+        {
+            return GetGameObjectComponentInParent<T>(gameObject, false);
+        }
+
+        internal static T? GetGameObjectComponentInParent<T>(GameObject gameObject, bool includeInactive) where T : Component
         {
             ArgumentNullException.ThrowIfNull(gameObject);
 
@@ -2471,13 +2646,18 @@ namespace Infernux.Managed
                 return gameObject.transform as T;
             }
 
-            return GetManagedGameObjectComponentInParent<T>(gameObject);
+            return GetManagedGameObjectComponentInParent<T>(gameObject, includeInactive);
         }
 
         internal static T[] GetGameObjectComponentsInParent<T>(GameObject gameObject) where T : Component
         {
+            return GetGameObjectComponentsInParent<T>(gameObject, false);
+        }
+
+        internal static T[] GetGameObjectComponentsInParent<T>(GameObject gameObject, bool includeInactive) where T : Component
+        {
             ArgumentNullException.ThrowIfNull(gameObject);
-            Component[] components = GetGameObjectComponentsInParent(gameObject, typeof(T));
+            Component[] components = GetGameObjectComponentsInParent(gameObject, typeof(T), includeInactive);
             T[] typed = new T[components.Length];
             for (int i = 0; i < components.Length; i++)
             {
@@ -2487,6 +2667,11 @@ namespace Infernux.Managed
         }
 
         internal static Component? GetGameObjectComponentInParent(GameObject gameObject, Type type)
+        {
+            return GetGameObjectComponentInParent(gameObject, type, false);
+        }
+
+        internal static Component? GetGameObjectComponentInParent(GameObject gameObject, Type type, bool includeInactive)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
@@ -2502,10 +2687,15 @@ namespace Infernux.Managed
                 return gameObject.transform;
             }
 
-            return GetManagedGameObjectComponentInParent(gameObject, type);
+            return GetManagedGameObjectComponentInParent(gameObject, type, includeInactive);
         }
 
         internal static Component[] GetGameObjectComponentsInParent(GameObject gameObject, Type type)
+        {
+            return GetGameObjectComponentsInParent(gameObject, type, false);
+        }
+
+        internal static Component[] GetGameObjectComponentsInParent(GameObject gameObject, Type type, bool includeInactive)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
@@ -2517,7 +2707,7 @@ namespace Infernux.Managed
             }
 
             List<Component> results = new();
-            CollectComponentsInParent(gameObject, type, results);
+            CollectComponentsInParent(gameObject, type, includeInactive, true, results);
             return results.ToArray();
         }
 
@@ -2539,7 +2729,7 @@ namespace Infernux.Managed
             return FindManagedComponentOnGameObject(gameObject.InstanceId, type);
         }
 
-        private static T? GetManagedGameObjectComponentInChildren<T>(GameObject gameObject) where T : Component
+        private static T? GetManagedGameObjectComponentInChildren<T>(GameObject gameObject, bool includeInactive) where T : Component
         {
             if (!CanMatchManagedComponentType(typeof(T)))
             {
@@ -2547,17 +2737,17 @@ namespace Infernux.Managed
                     $"GetComponentInChildren<{typeof(T).Name}> currently supports Transform or managed MonoBehaviour-derived types only.");
             }
 
-            MonoBehaviour? component = FindManagedComponentInChildren(gameObject, typeof(T));
+            MonoBehaviour? component = FindManagedComponentInChildren(gameObject, typeof(T), includeInactive, true);
             return component is T typedComponent ? typedComponent : null;
         }
 
-        private static Component? GetManagedGameObjectComponentInChildren(GameObject gameObject, Type type)
+        private static Component? GetManagedGameObjectComponentInChildren(GameObject gameObject, Type type, bool includeInactive)
         {
             ValidateManagedLookupType(type, nameof(type), "GetComponentInChildren(Type)");
-            return FindManagedComponentInChildren(gameObject, type);
+            return FindManagedComponentInChildren(gameObject, type, includeInactive, true);
         }
 
-        private static T? GetManagedGameObjectComponentInParent<T>(GameObject gameObject) where T : Component
+        private static T? GetManagedGameObjectComponentInParent<T>(GameObject gameObject, bool includeInactive) where T : Component
         {
             if (!CanMatchManagedComponentType(typeof(T)))
             {
@@ -2565,14 +2755,14 @@ namespace Infernux.Managed
                     $"GetComponentInParent<{typeof(T).Name}> currently supports Transform or managed MonoBehaviour-derived types only.");
             }
 
-            MonoBehaviour? component = FindManagedComponentInParent(gameObject, typeof(T));
+            MonoBehaviour? component = FindManagedComponentInParent(gameObject, typeof(T), includeInactive, true);
             return component is T typedComponent ? typedComponent : null;
         }
 
-        private static Component? GetManagedGameObjectComponentInParent(GameObject gameObject, Type type)
+        private static Component? GetManagedGameObjectComponentInParent(GameObject gameObject, Type type, bool includeInactive)
         {
             ValidateManagedLookupType(type, nameof(type), "GetComponentInParent(Type)");
-            return FindManagedComponentInParent(gameObject, type);
+            return FindManagedComponentInParent(gameObject, type, includeInactive, true);
         }
 
         private static string GetManagedTypeNameForLookup(Type type)
@@ -2633,9 +2823,12 @@ namespace Infernux.Managed
             }
         }
 
-        private static void CollectComponentsInChildren(GameObject gameObject, Type expectedType, List<Component> results)
+        private static void CollectComponentsInChildren(GameObject gameObject, Type expectedType, bool includeInactive, bool includeSelf, List<Component> results)
         {
-            CollectComponentsOnGameObject(gameObject, expectedType, results);
+            if (includeSelf || includeInactive || gameObject.activeInHierarchy)
+            {
+                CollectComponentsOnGameObject(gameObject, expectedType, results);
+            }
 
             Transform root = gameObject.transform;
             for (int i = 0; i < root.childCount; i++)
@@ -2644,16 +2837,21 @@ namespace Infernux.Managed
                 GameObject? childObject = child?.gameObject;
                 if (childObject is not null)
                 {
-                    CollectComponentsInChildren(childObject, expectedType, results);
+                    CollectComponentsInChildren(childObject, expectedType, includeInactive, false, results);
                 }
             }
         }
 
-        private static void CollectComponentsInParent(GameObject gameObject, Type expectedType, List<Component> results)
+        private static void CollectComponentsInParent(GameObject gameObject, Type expectedType, bool includeInactive, bool includeSelf, List<Component> results)
         {
+            bool isSelf = includeSelf;
             for (GameObject? current = gameObject; current is not null; current = current.transform.parent?.gameObject)
             {
-                CollectComponentsOnGameObject(current, expectedType, results);
+                if (isSelf || includeInactive || current.activeInHierarchy)
+                {
+                    CollectComponentsOnGameObject(current, expectedType, results);
+                }
+                isSelf = false;
             }
         }
 
@@ -2689,12 +2887,15 @@ namespace Infernux.Managed
             return null;
         }
 
-        private static MonoBehaviour? FindManagedComponentInChildren(GameObject gameObject, Type expectedType)
+        private static MonoBehaviour? FindManagedComponentInChildren(GameObject gameObject, Type expectedType, bool includeInactive, bool includeSelf)
         {
-            MonoBehaviour? self = FindManagedComponentOnGameObject(gameObject.InstanceId, expectedType);
-            if (self is not null)
+            if (includeSelf || includeInactive || gameObject.activeInHierarchy)
             {
-                return self;
+                MonoBehaviour? self = FindManagedComponentOnGameObject(gameObject.InstanceId, expectedType);
+                if (self is not null)
+                {
+                    return self;
+                }
             }
 
             Transform root = gameObject.transform;
@@ -2707,7 +2908,7 @@ namespace Infernux.Managed
                     continue;
                 }
 
-                MonoBehaviour? nested = FindManagedComponentInChildren(childObject, expectedType);
+                MonoBehaviour? nested = FindManagedComponentInChildren(childObject, expectedType, includeInactive, false);
                 if (nested is not null)
                 {
                     return nested;
@@ -2717,15 +2918,20 @@ namespace Infernux.Managed
             return null;
         }
 
-        private static MonoBehaviour? FindManagedComponentInParent(GameObject gameObject, Type expectedType)
+        private static MonoBehaviour? FindManagedComponentInParent(GameObject gameObject, Type expectedType, bool includeInactive, bool includeSelf)
         {
+            bool isSelf = includeSelf;
             for (GameObject? current = gameObject; current is not null; current = current.transform.parent?.gameObject)
             {
-                MonoBehaviour? match = FindManagedComponentOnGameObject(current.InstanceId, expectedType);
-                if (match is not null)
+                if (isSelf || includeInactive || current.activeInHierarchy)
                 {
-                    return match;
+                    MonoBehaviour? match = FindManagedComponentOnGameObject(current.InstanceId, expectedType);
+                    if (match is not null)
+                    {
+                        return match;
+                    }
                 }
+                isSelf = false;
             }
 
             return null;
