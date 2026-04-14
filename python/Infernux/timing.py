@@ -22,6 +22,7 @@ Note:
 from __future__ import annotations
 
 import time as _time_mod
+from Infernux.debug import Debug
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,18 @@ class _TimeMeta(type):
     def unscaled_delta_time(cls) -> float:
         """Unscaled (wall-clock) duration of the last frame (seconds)."""
         return cls._unscaled_delta_time
+
+    # -- Game-only timing (excludes editor panel overhead) ------------------
+
+    @property
+    def game_delta_time(cls) -> float:
+        """Game-only frame cost (seconds), excluding editor panel overhead.
+
+        Sum of SceneManager Update/LateUpdate + PrepareFrame + Game camera render.
+        Use ``1.0 / Time.game_delta_time`` for game-only FPS estimation.
+        Returns 0 when no data is available (e.g. before the first rendered frame).
+        """
+        return cls._game_delta_time
 
     # -- Fixed (physics) timing ---------------------------------------------
 
@@ -93,7 +106,8 @@ class _TimeMeta(type):
             pm = PlayModeManager.instance()
             if pm is not None:
                 pm._time_scale = cls._time_scale
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass  # PlayModeManager not yet loaded during early init
         except Exception as exc:
             import sys
@@ -149,6 +163,7 @@ class Time(metaclass=_TimeMeta):
     _time: float = 0.0
     _delta_time: float = 0.0
     _unscaled_delta_time: float = 0.0
+    _game_delta_time: float = 0.0          # game-only cost (seconds)
     _fixed_delta_time: float = 0.02        # 1/50 Hz — matches C++ default
     _time_scale: float = 1.0
     _frame_count: int = 0
@@ -166,6 +181,7 @@ class Time(metaclass=_TimeMeta):
         cls._time = 0.0
         cls._delta_time = 0.0
         cls._unscaled_delta_time = 0.0
+        cls._game_delta_time = 0.0
         cls._time_scale = 1.0
         cls._frame_count = 0
         cls._unscaled_time = 0.0

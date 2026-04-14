@@ -1,6 +1,7 @@
 #include "GizmosDrawCallBuffer.h"
 
 #include <algorithm>
+#include <core/config/MathConstants.h>
 #include <core/log/InxLog.h>
 #include <cstring>
 #include <function/resources/InxMaterial/InxMaterial.h>
@@ -134,7 +135,7 @@ DrawCallResult GizmosDrawCallBuffer::GetDrawCalls(std::shared_ptr<InxMaterial> g
         dc.indexStart = 0; // Each slice starts at 0
         dc.indexCount = static_cast<uint32_t>(m_slicedIndices[i].size());
         dc.worldMatrix = world;
-        dc.material = gizmoMaterial;
+        dc.material = gizmoMaterial.get();
         dc.objectId = OBJECT_ID_PREFIX | static_cast<uint64_t>(i);
         dc.meshVertices = &m_slicedVertices[i];
         dc.meshIndices = &m_slicedIndices[i];
@@ -181,12 +182,12 @@ DrawCallResult GizmosDrawCallBuffer::GetIconDrawCalls(std::shared_ptr<InxMateria
 
     glm::vec3 billboardRight = cameraRight;
     glm::vec3 billboardUp = cameraUp;
-    if (glm::dot(billboardRight, billboardRight) < 1e-6f) {
+    if (glm::dot(billboardRight, billboardRight) < kEpsilon) {
         billboardRight = glm::vec3(1.0f, 0.0f, 0.0f);
     } else {
         billboardRight = glm::normalize(billboardRight);
     }
-    if (glm::dot(billboardUp, billboardUp) < 1e-6f) {
+    if (glm::dot(billboardUp, billboardUp) < kEpsilon) {
         billboardUp = glm::vec3(0.0f, 1.0f, 0.0f);
     } else {
         billboardUp = glm::normalize(billboardUp);
@@ -266,7 +267,7 @@ DrawCallResult GizmosDrawCallBuffer::GetIconDrawCalls(std::shared_ptr<InxMateria
         dc.indexStart = 0;
         dc.indexCount = 6;
         dc.worldMatrix = glm::mat4(1.0f); // identity — vertices are in world space
-        dc.material = iconMaterial;
+        dc.material = iconMaterial.get();
         dc.objectId = ICON_ID_PREFIX | icon.objectId; // prefixed to avoid buffer collision
         dc.meshVertices = &m_iconSlicedVertices[i];
         dc.meshIndices = &m_iconSlicedIndices[i];
@@ -278,9 +279,9 @@ DrawCallResult GizmosDrawCallBuffer::GetIconDrawCalls(std::shared_ptr<InxMateria
     static size_t s_lastIconEntryCount = static_cast<size_t>(-1);
     static size_t s_lastBuiltIconDrawCallCount = static_cast<size_t>(-1);
     if (s_lastIconEntryCount != m_iconEntries.size() || s_lastBuiltIconDrawCallCount != result.drawCalls.size()) {
-        INXLOG_INFO("GizmoIcons: built ", result.drawCalls.size(), " draw call(s) from ", m_iconEntries.size(),
-                    " icon entr", (m_iconEntries.size() == 1 ? "y" : "ies"), " cameraPos=", cameraPos.x, ",",
-                    cameraPos.y, ",", cameraPos.z);
+        // INXLOG_INFO("GizmoIcons: built ", result.drawCalls.size(), " draw call(s) from ", m_iconEntries.size(),
+        //             " icon entr", (m_iconEntries.size() == 1 ? "y" : "ies"), " cameraPos=", cameraPos.x, ",",
+        //             cameraPos.y, ",", cameraPos.z);
         for (size_t i = 0; i < m_iconEntries.size(); ++i) {
             const auto &icon = m_iconEntries[i];
             const char *kindName = "default";
@@ -289,10 +290,11 @@ DrawCallResult GizmosDrawCallBuffer::GetIconDrawCalls(std::shared_ptr<InxMateria
             } else if (icon.iconKind == ICON_KIND_LIGHT) {
                 kindName = "light";
             }
-            INXLOG_INFO("GizmoIcons: entry[", i, "] kind=", kindName, " objectId=", icon.objectId,
-                        " pos=", icon.position.x, ",", icon.position.y, ",", icon.position.z,
-                        " distance=", (i < iconDistances.size() ? iconDistances[i] : -1.0f),
-                        " material=", (i < iconMaterialNames.size() ? iconMaterialNames[i] : std::string("<missing>")));
+            // INXLOG_INFO("GizmoIcons: entry[", i, "] kind=", kindName, " objectId=", icon.objectId,
+            //             " pos=", icon.position.x, ",", icon.position.y, ",", icon.position.z,
+            //             " distance=", (i < iconDistances.size() ? iconDistances[i] : -1.0f),
+            //             " material=", (i < iconMaterialNames.size() ? iconMaterialNames[i] :
+            //             std::string("<missing>")));
         }
         s_lastIconEntryCount = m_iconEntries.size();
         s_lastBuiltIconDrawCallCount = result.drawCalls.size();

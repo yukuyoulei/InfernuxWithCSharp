@@ -98,6 +98,7 @@ class InxRenderer
     void RegisterGUIRenderable(const char *name, std::shared_ptr<InxGUIRenderable> renderable);
     void UnregisterGUIRenderable(const char *name);
     void QueueDockTabSelection(const char *windowId);
+    void SetGUIPlayerMode(bool enabled);
 
     // ImGui texture management
     uint64_t UploadTextureForImGui(const std::string &name, const unsigned char *pixels, int width, int height);
@@ -129,7 +130,7 @@ class InxRenderer
     /// @brief Access editor tools (translate/rotate/scale gizmo)
     EditorTools *GetEditorTools();
 
-    /// @brief Access the component gizmos draw call buffer (Python-driven)
+    /// @brief Access the component gizmos draw call buffer used by the scripting layer
     GizmosDrawCallBuffer *GetGizmosDrawCallBuffer();
 
     /// @brief Set the selected object ID for outline tracking
@@ -170,7 +171,7 @@ class InxRenderer
     /// @return Pointer to SceneRenderGraph, or nullptr if not initialized
     SceneRenderGraph *GetSceneRenderGraph();
 
-    /// @brief Set a custom render pipeline (Python-driven rendering via SRC).
+    /// @brief Set a custom render pipeline provided through ScriptableRenderContext.
     /// Pass nullptr to revert to the default C++ rendering path.
     void SetRenderPipeline(std::shared_ptr<RenderPipelineCallback> pipeline);
 
@@ -188,10 +189,7 @@ class InxRenderer
     void SetGameCameraEnabled(bool enabled);
 
     /// @brief Enable/disable scene view rendering (called by Python panel visibility)
-    void SetSceneViewVisible(bool visible)
-    {
-        m_sceneViewVisible = visible;
-    }
+    void SetSceneViewVisible(bool visible);
     [[nodiscard]] bool IsSceneViewVisible() const
     {
         return m_sceneViewVisible;
@@ -201,6 +199,38 @@ class InxRenderer
     [[nodiscard]] bool IsGameCameraEnabled() const
     {
         return m_gameCameraEnabled;
+    }
+
+    /// @brief Get last frame's game view render time (CPU-side command recording) in ms.
+    /// This measures ONLY the game camera render pipeline, excluding editor panels, scene view, etc.
+    [[nodiscard]] double GetLastGameRenderMs() const
+    {
+        return m_lastGameRenderMs;
+    }
+
+    /// @brief Get game-only frame cost in ms (SceneUpdate + PrepareFrame + GameRender).
+    /// Excludes editor panel rendering (Inspector, Hierarchy, Console, etc.).
+    [[nodiscard]] double GetGameOnlyFrameMs() const
+    {
+        return m_gameOnlyFrameMs;
+    }
+
+    /// @brief Get SceneManager::Update + LateUpdate time in ms.
+    [[nodiscard]] double GetSceneUpdateMs() const
+    {
+        return m_sceneUpdateMs;
+    }
+
+    /// @brief Get GUI::BuildFrame time in ms (all ImGui panels).
+    [[nodiscard]] double GetGuiBuildMs() const
+    {
+        return m_guiBuildMs;
+    }
+
+    /// @brief Get PrepareFrame (collect/cull renderables) time in ms.
+    [[nodiscard]] double GetPrepareFrameMs() const
+    {
+        return m_prepareFrameMs;
     }
 
     /// @brief Get the screen UI renderer for GPU-based 2D screen-space UI
@@ -243,6 +273,43 @@ class InxRenderer
     /// @brief Get current present mode (0=IMMEDIATE, 1=MAILBOX, 2=FIFO, 3=FIFO_RELAXED)
     int GetPresentMode() const;
 
+    // ========================================================================
+    // Editor Power-Save / Idle Mode
+    // ========================================================================
+
+    /// @brief Enable/disable editor idle mode (reduced FPS when no input).
+    void SetEditorIdleEnabled(bool enabled);
+
+    /// @brief Check if editor idle mode is enabled.
+    bool IsEditorIdleEnabled() const;
+
+    /// @brief Set the idle-mode target FPS (e.g. 10).  0 disables idling.
+    void SetEditorIdleFps(float fps);
+
+    /// @brief Get the current idle-mode target FPS.
+    float GetEditorIdleFps() const;
+
+    /// @brief Check if the editor is currently in idle (reduced-FPS) state.
+    bool IsEditorIdling() const;
+
+    /// @brief Set the editor-mode FPS cap (e.g. 60). 0 = uncapped.
+    /// Only applies outside play mode.
+    void SetEditorFpsCap(float fps);
+
+    /// @brief Get the editor-mode FPS cap.
+    float GetEditorFpsCap() const;
+
+    /// @brief Tell the renderer whether the engine is in play mode.
+    /// In play mode, the frame-rate cap and idle sleep are both disabled.
+    void SetPlayModeRendering(bool play);
+
+    /// @brief Check if the renderer is in play-mode (uncapped FPS).
+    bool IsPlayModeRendering() const;
+
+    /// @brief Force full-speed rendering for the next few frames (e.g. after
+    /// a programmatic scene change that doesn't generate SDL events).
+    void RequestFullSpeedFrame();
+
   private:
     InxAppMetadata m_appMetadata;
     InxAppMetadata m_rendererMetadata;
@@ -274,7 +341,12 @@ class InxRenderer
     std::unique_ptr<SceneRenderGraph> m_gameRenderGraph;
     std::unique_ptr<InxScreenUIRenderer> m_screenUIRenderer;
     bool m_gameCameraEnabled = false;
-    bool m_sceneViewVisible = true; ///< Set from Python scene_view_panel visibility
+    bool m_sceneViewVisible = false; ///< Default false; Python editor sets true via SetSceneViewVisible()
+    double m_lastGameRenderMs = 0.0; ///< Per-frame game render time (CPU command recording)
+    double m_sceneUpdateMs = 0.0;    ///< SceneManager::Update + LateUpdate (ms)
+    double m_guiBuildMs = 0.0;       ///< GUI::BuildFrame (all ImGui panels) (ms)
+    double m_prepareFrameMs = 0.0;   ///< PrepareFrame (collect/cull) (ms)
+    double m_gameOnlyFrameMs = 0.0;  ///< Sum of game-only phases (ms)
 
     /// Per-frame cached game camera pointer, lazily resolved once per frame
     /// by FindGameCameraCached() and cleared at the start of each DrawFrame.
@@ -291,7 +363,7 @@ class InxRenderer
     uint32_t m_gameShadowCascadeCount = 0;
     float m_gameShadowMapResolution = 0.0f;
 
-    // SRP: Python-driven render pipeline (nullptr = default C++ path)
+    // Scriptable render pipeline (nullptr = default C++ path)
     std::shared_ptr<RenderPipelineCallback> m_renderPipeline;
 
     // Selection tracking for auto-update of outline transforms
@@ -309,6 +381,22 @@ class InxRenderer
         double gameRestoreMs = 0;
     };
     ExecutorSubTiming m_executorTiming{};
+
+    struct FrameDetailTiming
+    {
+        double frameCacheBeginMs = 0.0;
+        double sceneUpdateCallMs = 0.0;
+        double lateUpdateCallMs = 0.0;
+        double frameCacheEndMs = 0.0;
+        double cleanupCollectIdsMs = 0.0;
+        double cleanupReleaseMs = 0.0;
+        double cleanupActiveIds = 0.0;
+        double lightingCollectMs = 0.0;
+        double lightingShadowEditorMs = 0.0;
+        double lightingShadowGameMs = 0.0;
+        double lightingUploadMs = 0.0;
+    };
+    FrameDetailTiming m_frameDetailTiming{};
 #endif
 
     /// @brief Find effective game camera via Scene::FindGameCamera().
@@ -329,5 +417,18 @@ class InxRenderer
     /// Used by Python to run heavy scene loads between frames, avoiding
     /// Windows "Not Responding" by running between SDL_PumpEvents() calls.
     std::function<void()> m_postDrawCallback;
+
+    // ---- DrawFrame sub-methods (extracted for readability) ----
+
+    /// @brief Check scene & game render graph MSAA requests; apply if changed.
+    /// @return true if MSAA change was triggered and DrawFrame should return early.
+    bool CheckAndApplyMsaaRequest();
+
+    /// @brief Build EngineGlobalsUBO and stage it for the current frame.
+    void StageEngineGlobalsUBO();
+
+    /// @brief Collect and merge draw calls from all active render graphs,
+    /// then pass them to VkCore for unused buffer cleanup.
+    void CleanupDrawCallBuffers();
 };
 } // namespace infernux

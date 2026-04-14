@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from Infernux.debug import Debug
+from Infernux.engine.i18n import t
 
 # ASCII-safe root for Nuitka staging and temporary build artifacts.
 _STAGING_ROOT = "C:\\_InxBuild"
@@ -35,6 +36,8 @@ _AUTO_INSTALLABLE_PACKAGES = {
     "nuitka": "nuitka",
     "ordered_set": "ordered-set",
     "PIL": "Pillow",
+    "numba": "numba",
+    "llvmlite": "llvmlite",
 }
 
 
@@ -77,7 +80,8 @@ def _python_version(python_exe: str) -> str:
             ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
             timeout=20,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         return ""
     if completed.returncode != 0:
         return ""
@@ -88,7 +92,8 @@ def _is_embeddable_python_exe(python_exe: str) -> bool:
     try:
         root = os.path.dirname(os.path.abspath(python_exe))
         return any(name.lower().endswith("._pth") for name in os.listdir(root))
-    except OSError:
+    except OSError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         return False
 
 
@@ -127,18 +132,39 @@ def _resolve_builder_python() -> str:
 
 
 def _ensure_python_packages(python_exe: str, *module_names: str) -> None:
+    import time as _time
     missing_packages: list[str] = []
-    for module_name in module_names:
-        completed = _run_python(
-            python_exe,
-            ["-c", f"import importlib.util; print(int(importlib.util.find_spec('{module_name}') is not None))"],
-            timeout=20,
-        )
-        if completed.returncode == 0 and (completed.stdout or "").strip() == "1":
-            continue
-        package_name = _AUTO_INSTALLABLE_PACKAGES.get(module_name)
-        if package_name and package_name not in missing_packages:
-            missing_packages.append(package_name)
+    _check_t0 = _time.perf_counter()
+
+    # Check all modules in a single subprocess instead of one per module.
+    check_script = (
+        "import importlib.util, sys; "
+        "mods = sys.argv[1:]; "
+        "print(','.join(str(int(importlib.util.find_spec(m) is not None)) for m in mods))"
+    )
+    completed = _run_python(
+        python_exe,
+        ["-c", check_script, *module_names],
+        timeout=30,
+    )
+    if completed.returncode == 0 and (completed.stdout or "").strip():
+        results = (completed.stdout or "").strip().split(",")
+        for module_name, available in zip(module_names, results):
+            if available.strip() != "1":
+                package_name = _AUTO_INSTALLABLE_PACKAGES.get(module_name)
+                if package_name and package_name not in missing_packages:
+                    missing_packages.append(package_name)
+    else:
+        # Fallback: treat all as potentially missing
+        for module_name in module_names:
+            package_name = _AUTO_INSTALLABLE_PACKAGES.get(module_name)
+            if package_name and package_name not in missing_packages:
+                missing_packages.append(package_name)
+
+    Debug.log_internal(
+        f"  package availability check for {len(module_names)} modules in "
+        f"{_time.perf_counter() - _check_t0:.2f}s"
+    )
 
     if not missing_packages:
         return
@@ -147,8 +173,12 @@ def _ensure_python_packages(python_exe: str, *module_names: str) -> None:
         "Missing build packages detected — installing automatically: "
         + ", ".join(missing_packages)
     )
+    _pip_t0 = _time.perf_counter()
     subprocess.check_call(
         [python_exe, "-m", "pip", "install", *missing_packages, "--quiet"],
+    )
+    Debug.log_internal(
+        f"  pip install completed in {_time.perf_counter() - _pip_t0:.2f}s"
     )
 
 
@@ -176,6 +206,30 @@ def _install_requirements_files(python_exe: str, requirement_files: List[str]) -
 class NuitkaBuilder:
     """Wraps Nuitka compilation for Infernux standalone builds."""
 
+    # Packages that must be excluded from Nuitka compilation and
+    # injected as raw site-packages into the dist.  Numba requires
+    # Python bytecode at runtime for its LLVM JIT compiler — Nuitka's
+    # C compilation removes the bytecode, making @njit silently fail.
+    _JIT_NOFOLLOW_PACKAGES = frozenset({"numba", "llvmlite", "numpy"})
+
+    # Directories stripped from raw-copied JIT packages to slim down
+    # the build output.  These are never needed at runtime.
+    _JIT_STRIP_DIRS: dict[str, list[str]] = {
+        "numba": [
+            "tests", "cuda", "testing", "pycc", "scripts",
+            # CUDA is ~4 MB and only needed for GPU compute
+            # tests/testing are ~10 MB of test fixtures
+        ],
+        "numpy": [
+            "tests", "f2py", "testing", "doc",
+            "_pyinstaller", "distutils",
+            # f2py is 1.6 MB Fortran build tooling
+        ],
+        "llvmlite": [
+            "tests",
+        ],
+    }
+
     def __init__(
         self,
         entry_script: str,
@@ -188,7 +242,9 @@ class NuitkaBuilder:
         extra_include_packages: Optional[List[str]] = None,
         extra_include_data: Optional[List[str]] = None,
         extra_requirements_files: Optional[List[str]] = None,
+        raw_copy_packages: Optional[List[str]] = None,
         console_mode: str = "disable",
+        lto: bool = True,
     ):
         self.entry_script = os.path.abspath(entry_script)
         self.output_dir = os.path.abspath(output_dir)
@@ -197,6 +253,7 @@ class NuitkaBuilder:
         self.file_version = file_version
         self.icon_path = icon_path
         self.console_mode = console_mode
+        self.lto = lto
         self.extra_include_packages = list(extra_include_packages or [])
         self.extra_include_data = list(extra_include_data or [])
         self.extra_requirements_files = [
@@ -204,6 +261,7 @@ class NuitkaBuilder:
             for path in list(extra_requirements_files or [])
             if path
         ]
+        self.raw_copy_packages = list(raw_copy_packages or [])
 
         # Staging directory — unique per build to allow parallel builds
         tag = hashlib.md5(self.output_dir.encode()).hexdigest()[:8]
@@ -220,41 +278,55 @@ class NuitkaBuilder:
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
         """Run Nuitka compilation.  Returns the dist directory path."""
+        import time as _time
+        _build_t0 = _time.perf_counter()
+        _stage_t0 = _build_t0
 
         def _p(msg: str, pct: float):
+            nonlocal _stage_t0
             if cancel_event is not None and cancel_event.is_set():
                 raise _BuildCancelled()
+            now = _time.perf_counter()
+            elapsed = now - _stage_t0
+            _stage_t0 = now
             if on_progress:
                 on_progress(msg, pct)
-            Debug.log_internal(f"[NuitkaBuilder {pct:.0%}] {msg}")
+            Debug.log_internal(
+                f"[NuitkaBuilder {pct:.0%}] {msg}  (prev {elapsed:.2f}s, "
+                f"nuitka total {now - _build_t0:.1f}s)"
+            )
 
-        _p("检查 Nuitka 可用性 Checking Nuitka...", 0.0)
+        _p(t("build.step.checking_nuitka"), 0.0)
         self._check_nuitka()
 
-        _p("准备暂存目录 Preparing staging directory...", 0.03)
+        _p(t("build.step.preparing_staging"), 0.03)
         self._prepare_staging()
 
-        _p("构建 Nuitka 命令 Building command...", 0.05)
+        _p(t("build.step.building_command"), 0.05)
         cmd = self._build_command()
-        _p(f"命令: {' '.join(cmd)}", 0.05)
+        _p(f"cmd: {' '.join(cmd)}", 0.05)
 
-        _p("执行 Nuitka 编译 Running Nuitka compilation...", 0.10)
+        _p(t("build.step.running_nuitka"), 0.10)
         dist_dir = self._run_nuitka(cmd, on_progress, cancel_event)
 
-        _p("注入原生引擎库 Injecting native engine libraries...", 0.85)
+        _p(t("build.step.injecting_libs"), 0.85)
         self._inject_native_libs(dist_dir)
 
+        if self.raw_copy_packages:
+            _p(t("build.step.injecting_jit"), 0.87)
+            self._inject_jit_packages(dist_dir)
+
         if sys.platform == "win32":
-            _p("嵌入 UTF-8 清单 Embedding UTF-8 manifest...", 0.90)
+            _p(t("build.step.embedding_manifest"), 0.90)
             self._embed_utf8_manifest(dist_dir)
 
-            _p("签名可执行文件 Signing executable...", 0.92)
+            _p(t("build.step.signing_exe"), 0.92)
             self._sign_executable(dist_dir)
 
-        _p("清理编译产物 Cleaning build artifacts...", 0.95)
+        _p(t("build.step.cleaning_artifacts"), 0.95)
         self._cleanup_build_artifacts()
 
-        _p("Nuitka 编译完成 Compilation complete!", 1.0)
+        _p(t("build.step.nuitka_complete"), 1.0)
         return dist_dir
 
     # ------------------------------------------------------------------
@@ -263,11 +335,25 @@ class NuitkaBuilder:
 
     def _check_nuitka(self):
         """Ensure Nuitka and build-time project dependencies are installed."""
+        import time as _time
         try:
-            _ensure_python_packages(self._builder_python, "nuitka", "ordered_set")
+            _t0 = _time.perf_counter()
+            _ensure_python_packages(
+                self._builder_python,
+                "nuitka",
+                "ordered_set",
+                *self.extra_include_packages,
+            )
+            Debug.log_internal(
+                f"  _ensure_python_packages in {_time.perf_counter() - _t0:.2f}s"
+            )
+            _t1 = _time.perf_counter()
             _install_requirements_files(
                 self._builder_python,
                 self.extra_requirements_files,
+            )
+            Debug.log_internal(
+                f"  _install_requirements_files in {_time.perf_counter() - _t1:.2f}s"
             )
         except Exception as exc:
             raise RuntimeError(
@@ -288,7 +374,14 @@ class NuitkaBuilder:
         edge cases and keeps compiler output paths stable on Windows.
         """
         if os.path.isdir(self._staging_dir):
-            shutil.rmtree(self._staging_dir, ignore_errors=True)
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["cmd", "/c", "rd", "/s", "/q", self._staging_dir],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                shutil.rmtree(self._staging_dir, ignore_errors=True)
         os.makedirs(self._staging_dir, exist_ok=True)
 
         # Copy entry script into staging (path itself may be non-ASCII)
@@ -331,7 +424,18 @@ class NuitkaBuilder:
             cmd.append("--msvc=latest")
 
         # Link-time optimization for smaller and faster binaries
-        cmd.append("--lto=yes")
+        if self.lto:
+            cmd.append("--lto=yes")
+
+        # Strip docstrings and assert statements for smaller output
+        cmd.append("--python-flag=-OO")
+
+        # Tell Nuitka to exclude large dev-only frameworks at the module
+        # level — catches transitive imports that --nofollow-import-to
+        # might miss.
+        cmd.append("--noinclude-pytest-mode=nofollow")
+        cmd.append("--noinclude-unittest-mode=nofollow")
+        cmd.append("--noinclude-setuptools-mode=nofollow")
 
         # Parallel C compilation
         cmd.append("--jobs=%d" % max(1, os.cpu_count() - 1))
@@ -347,6 +451,10 @@ class NuitkaBuilder:
         # Explicitly ensure the pybind11 native extension is bundled
         # (Nuitka may not auto-detect it because it's a .pyd, not .py).
         cmd.append("--include-module=Infernux.lib._Infernux")
+
+        # csv is needed by importlib.metadata (Python's own import system)
+        # but Nuitka may not auto-detect it when JIT packages are excluded.
+        cmd.append("--include-module=csv")
 
         # Prevent Nuitka from following into editor-only modules that the
         # standalone player never uses.  The _INFERNUX_PLAYER_MODE guard
@@ -364,11 +472,35 @@ class NuitkaBuilder:
             "cv2",
             "imageio",
             "psd_tools",
+            "av",  # PyAV/ffmpeg — build-time splash encoding only
         ):
             cmd.append(f"--nofollow-import-to={_editor_mod}")
 
+        # Exclude JIT packages from Nuitka compilation — they will be
+        # injected as raw site-packages afterwards so numba retains the
+        # Python bytecode it needs for LLVM JIT at runtime.
+        _nofollow_jit = self._JIT_NOFOLLOW_PACKAGES | set(self.raw_copy_packages)
+        for _jit_pkg in sorted(_nofollow_jit):
+            cmd.append(f"--nofollow-import-to={_jit_pkg}")
+
+        # Auto-discover stdlib modules that the raw-copied JIT packages
+        # import transitively.  Nuitka can't discover them because the
+        # packages are excluded via --nofollow-import-to, so we trace
+        # them in a subprocess and include them explicitly.
+        if self.raw_copy_packages:
+            for _stdlib_mod in self._discover_jit_stdlib_deps():
+                cmd.append(f"--include-module={_stdlib_mod}")
+
+        # Numba's parallel backend (prange / parallel=True) imports
+        # multiprocessing lazily at JIT compile time — NOT at
+        # ``import numba``.  The auto-discovery above therefore misses
+        # it.  Include it unconditionally when JIT packages are bundled.
+        if _nofollow_jit & self._JIT_NOFOLLOW_PACKAGES:
+            cmd.append("--include-module=multiprocessing")
+
         for pkg in self.extra_include_packages:
-            cmd.append(f"--include-package={pkg}")
+            if pkg not in _nofollow_jit:
+                cmd.append(f"--include-package={pkg}")
 
         for pattern in self.extra_include_data:
             cmd.append(f"--include-package-data={pattern}")
@@ -391,6 +523,60 @@ class NuitkaBuilder:
 
         cmd.append(self._staged_entry)
         return cmd
+
+    # ------------------------------------------------------------------
+    # Auto-discover JIT package stdlib dependencies
+    # ------------------------------------------------------------------
+
+    def _discover_jit_stdlib_deps(self) -> List[str]:
+        """Import raw_copy_packages in the builder Python and return the
+        set of stdlib top-level modules they transitively load.
+
+        This replaces the manual list approach — numba/llvmlite/numpy
+        pull in dozens of stdlib modules (email, csv, html, http, …)
+        that Nuitka cannot discover because we exclude these packages
+        via --nofollow-import-to.
+        """
+        import time as _time
+        _t0 = _time.perf_counter()
+
+        pkgs_arg = ",".join(sorted(self.raw_copy_packages))
+        # The subprocess: record modules before vs after importing the
+        # packages, then report only stdlib top-level names.
+        trace_script = (
+            "import sys; "
+            "before = set(sys.modules); "
+            "pkgs = '$PKGS'.split(','); "
+            "[__import__(p) for p in pkgs]; "
+            "after = set(sys.modules); "
+            "new = {m.split('.')[0] for m in after - before}; "
+            "stdlib = sorted(new & sys.stdlib_module_names); "
+            "print(','.join(stdlib))"
+        ).replace("$PKGS", pkgs_arg)
+
+        try:
+            result = _run_python(
+                self._builder_python,
+                ["-c", trace_script],
+                timeout=120,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                Debug.log_warning(
+                    f"JIT stdlib trace failed (exit {result.returncode}): "
+                    f"{(result.stderr or '').strip()[:200]}"
+                )
+                return []
+
+            mods = [m for m in result.stdout.strip().split(",") if m]
+            Debug.log_internal(
+                f"  JIT stdlib trace: {len(mods)} modules in "
+                f"{_time.perf_counter() - _t0:.2f}s  "
+                f"({', '.join(mods[:10])}{'…' if len(mods) > 10 else ''})"
+            )
+            return mods
+        except Exception as exc:
+            Debug.log_warning(f"JIT stdlib trace error: {exc}")
+            return []
 
     # ------------------------------------------------------------------
     # Nuitka execution
@@ -446,6 +632,8 @@ class NuitkaBuilder:
         if pythonpath_entries:
             env["PYTHONPATH"] = os.pathsep.join(_dedupe_paths(pythonpath_entries))
 
+        import time as _time
+        _nuitka_proc_t0 = _time.perf_counter()
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -474,6 +662,11 @@ class NuitkaBuilder:
             raise
 
         proc.wait()
+        _nuitka_elapsed = _time.perf_counter() - _nuitka_proc_t0
+        Debug.log_internal(
+            f"  Nuitka subprocess finished in {_nuitka_elapsed:.1f}s  "
+            f"({len(lines_collected)} output lines, exit {proc.returncode})"
+        )
 
         if proc.returncode != 0:
             tail = "\n".join(lines_collected[-30:])
@@ -505,6 +698,8 @@ class NuitkaBuilder:
         can find the .pyd, and ``os.add_dll_directory(lib_dir)`` picks
         up the companion DLLs.
         """
+        import time as _time
+        _inject_t0 = _time.perf_counter()
         import Infernux.lib as _lib
         lib_dir = Path(_lib.__file__).parent
 
@@ -536,6 +731,153 @@ class NuitkaBuilder:
                 if not dst_root.exists():
                     shutil.copy2(src, dst_root)
                     Debug.log_internal(f"  Injected (root): {src.name}")
+
+        Debug.log_internal(
+            f"  native lib injection total: {_time.perf_counter() - _inject_t0:.2f}s  "
+            f"({len(native_files)} files)"
+        )
+
+    # ------------------------------------------------------------------
+    # Inject raw JIT packages
+    # ------------------------------------------------------------------
+
+    def _inject_jit_packages(self, dist_dir: str):
+        """Copy raw site-packages into the Nuitka dist for JIT-dependent packages.
+
+        Numba requires Python bytecode at runtime for LLVM JIT compilation.
+        Nuitka's C compilation removes bytecode, so these packages must be
+        copied as-is from the builder environment's site-packages.
+        """
+        if not self.raw_copy_packages:
+            return
+
+        import time as _time
+        _t0 = _time.perf_counter()
+
+        # Discover site-packages directory of the builder Python.
+        # In conda environments getsitepackages() returns [env_root,
+        # env_root/Lib/site-packages] — we need the one that actually
+        # contains installed packages (the "Lib/site-packages" entry).
+        result = _run_python(
+            self._builder_python,
+            ["-c",
+             "import site, os, json; "
+             "print(json.dumps(site.getsitepackages()))"],
+        )
+        import json as _json
+        candidates = _json.loads(result.stdout.strip())
+        site_packages = ""
+        for cand in reversed(candidates):
+            if os.path.isdir(cand) and os.path.isdir(os.path.join(cand, "numba")):
+                site_packages = cand
+                break
+        if not site_packages:
+            # Fallback: pick the last entry (usually Lib/site-packages)
+            for cand in reversed(candidates):
+                if os.path.isdir(cand):
+                    site_packages = cand
+                    break
+        if not site_packages:
+            Debug.log_warning(
+                f"Builder site-packages not found in {candidates}"
+            )
+            return
+
+        Debug.log_internal(
+            f"  site-packages resolved: {site_packages}  "
+            f"({_time.perf_counter() - _t0:.2f}s)"
+        )
+
+        copied: list[str] = []
+        dist_root = Path(dist_dir)
+
+        for pkg in sorted(self.raw_copy_packages):
+            src = os.path.join(site_packages, pkg)
+            if not os.path.isdir(src):
+                Debug.log_warning(
+                    f"JIT package '{pkg}' not found in {site_packages} — skipping"
+                )
+                continue
+
+            _pkg_t0 = _time.perf_counter()
+            dst = dist_root / pkg
+            if dst.exists():
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["cmd", "/c", "rd", "/s", "/q", str(dst)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                else:
+                    shutil.rmtree(dst)
+
+            # Use robocopy on Windows for significantly faster bulk copy.
+            # /XD skips directories that are never needed at runtime,
+            # cutting the copy volume substantially (especially numpy).
+            # Package-specific strip dirs come from _JIT_STRIP_DIRS.
+            xd_dirs = ["__pycache__", "tests", "test"]
+            xd_dirs.extend(self._JIT_STRIP_DIRS.get(pkg, []))
+            if sys.platform == "win32":
+                rc = subprocess.call(
+                    ["robocopy", src, str(dst), "/E",
+                     "/XD", *xd_dirs,
+                     "/XF", "*.pyc", "*.pdb", "*.lib", "*.a",
+                     "/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=0x08000000,
+                )
+                if rc >= 8:
+                    Debug.log_warning(
+                        f"robocopy failed for '{pkg}' (exit {rc}), "
+                        f"falling back to shutil.copytree"
+                    )
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                    shutil.copytree(src, dst)
+            else:
+                shutil.copytree(src, dst)
+                # Strip on non-Windows too
+                for strip_dir in xd_dirs:
+                    strip_path = dst / strip_dir
+                    if strip_path.is_dir():
+                        shutil.rmtree(strip_path)
+
+            elapsed = _time.perf_counter() - _pkg_t0
+            copied.append(f"{pkg} ({elapsed:.1f}s)")
+
+            # Copy companion .libs directory if it exists (e.g. numpy.libs
+            # contains OpenBLAS DLLs that numpy's C extensions need).
+            libs_name = f"{pkg}.libs"
+            libs_src = os.path.join(site_packages, libs_name)
+            if os.path.isdir(libs_src):
+                libs_dst = dist_root / libs_name
+                if libs_dst.exists():
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            ["cmd", "/c", "rd", "/s", "/q", str(libs_dst)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    else:
+                        shutil.rmtree(libs_dst)
+                if sys.platform == "win32":
+                    subprocess.call(
+                        ["robocopy", libs_src, str(libs_dst), "/E",
+                         "/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=0x08000000,
+                    )
+                else:
+                    shutil.copytree(libs_src, libs_dst)
+                copied.append(f"{libs_name}")
+
+        if copied:
+            Debug.log_internal(
+                f"  JIT package injection: {', '.join(copied)}  "
+                f"(total {_time.perf_counter() - _t0:.1f}s)"
+            )
 
     # ------------------------------------------------------------------
     # UTF-8 application manifest (Windows)
@@ -749,18 +1091,40 @@ if ($result.StatusMessage) {
     # ------------------------------------------------------------------
 
     def _cleanup_build_artifacts(self):
-        """Remove Nuitka's intermediate .build directory from staging."""
+        """Remove Nuitka's intermediate .build directory from staging.
+
+        Deletion runs in a background daemon thread so the caller doesn't
+        block.  On Windows we use ``rd /s /q`` which is dramatically faster
+        than Python's shutil.rmtree (native NTFS batch-delete vs per-file
+        unlink syscalls).
+        """
+        dirs_to_remove: list[str] = []
         build_dir = os.path.join(self._staging_dir, "boot.build")
         if os.path.isdir(build_dir):
-            shutil.rmtree(build_dir, ignore_errors=True)
-        # Also remove the staging temp dir
+            dirs_to_remove.append(build_dir)
         safe_tmp = os.path.join(self._staging_dir, "_tmp")
         if os.path.isdir(safe_tmp):
-            shutil.rmtree(safe_tmp, ignore_errors=True)
-        # Remove the copied boot script
+            dirs_to_remove.append(safe_tmp)
+        # Remove the copied boot script (tiny file, do it synchronously)
         staged_script = os.path.join(self._staging_dir, "boot.py")
         if os.path.isfile(staged_script):
             os.remove(staged_script)
+
+        if dirs_to_remove:
+            def _bg_remove(paths: list[str]):
+                for p in paths:
+                    if sys.platform == "win32":
+                        # rd /s /q is 5-10x faster than shutil.rmtree on NTFS
+                        subprocess.run(
+                            ["cmd", "/c", "rd", "/s", "/q", p],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    else:
+                        shutil.rmtree(p, ignore_errors=True)
+
+            t = threading.Thread(target=_bg_remove, args=(dirs_to_remove,), daemon=True)
+            t.start()
 
     # ------------------------------------------------------------------
     # Icon conversion
@@ -778,7 +1142,7 @@ if ($result.StatusMessage) {
             return icon_path
 
         try:
-            _ensure_python_packages("PIL")
+            _ensure_python_packages(self._builder_python, "PIL")
             from PIL import Image
         except ImportError:
             Debug.log_warning(

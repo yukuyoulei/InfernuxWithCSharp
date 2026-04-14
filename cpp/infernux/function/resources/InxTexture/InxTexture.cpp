@@ -30,11 +30,29 @@ bool InxTexture::LoadImportSettings(const std::string &filePath)
     if (meta.HasKey("max_size")) {
         m_maxSize = meta.GetDataAs<int>("max_size");
     }
-
-    INXLOG_INFO("InxTexture::LoadImportSettings: path='", filePath, "' srgb=", m_srgb ? "true" : "false", " type='",
-                m_textureType, "' mipmaps=", m_generateMipmaps ? "true" : "false", " maxSize=", m_maxSize);
-
     return true;
+}
+
+// =============================================================================
+// Clone — Unity-style Object.Instantiate for textures
+// =============================================================================
+
+std::shared_ptr<InxTexture> InxTexture::Clone() const
+{
+    auto clone = std::make_shared<InxTexture>();
+
+    // Copy metadata — the clone references the same image file on disk.
+    clone->m_name = m_name + " (Instance)";
+    clone->m_filePath = m_filePath; // Same source file
+    // clone->m_guid intentionally left empty — runtime-only instance
+
+    // Copy import settings
+    clone->m_textureType = m_textureType;
+    clone->m_srgb = m_srgb;
+    clone->m_generateMipmaps = m_generateMipmaps;
+    clone->m_maxSize = m_maxSize;
+
+    return clone;
 }
 
 } // namespace infernux

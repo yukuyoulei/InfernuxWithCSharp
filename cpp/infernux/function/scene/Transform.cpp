@@ -24,17 +24,31 @@ Transform::~Transform()
     TransformECSStore::Instance().Release(m_ecsHandle);
 }
 
+Transform *Transform::GetParentTransformSafe() const
+{
+    if (!m_gameObject || !m_gameObject->GetParent()) {
+        return nullptr;
+    }
+    return m_gameObject->GetParent()->GetTransform();
+}
+
+glm::vec3 Transform::GetWorldDirection(const glm::vec3 &localAxis) const
+{
+    return glm::normalize(GetWorldRotation() * localAxis);
+}
+
 // ============================================================================
 // World-space Position
 // ============================================================================
 
 glm::vec3 Transform::GetWorldPosition() const
 {
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        return GetLocalPosition();
+    auto &store = TransformECSStore::Instance();
+    if (store.IsFrameCacheActive()) {
+        return store.GetCachedWorldPosition(m_ecsHandle.index);
     }
 
-    Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
+    Transform *parentTransform = GetParentTransformSafe();
     if (!parentTransform) {
         return GetLocalPosition();
     }
@@ -45,19 +59,20 @@ glm::vec3 Transform::GetWorldPosition() const
 
 void Transform::SetWorldPosition(const glm::vec3 &worldPos)
 {
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        TransformECSStore::Instance().Get(m_ecsHandle).localPosition = worldPos;
-    } else {
-        Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
-        if (!parentTransform) {
-            TransformECSStore::Instance().Get(m_ecsHandle).localPosition = worldPos;
-        } else {
-            glm::mat4 invParentWorld = glm::inverse(parentTransform->GetWorldMatrix());
-            TransformECSStore::Instance().Get(m_ecsHandle).localPosition =
-                glm::vec3(invParentWorld * glm::vec4(worldPos, 1.0f));
-        }
+    auto &store = TransformECSStore::Instance();
+    if (store.IsFrameCacheActive()) {
+        store.SetCachedWorldPosition(m_ecsHandle.index, worldPos);
+        return;
     }
-    TransformECSStore::Instance().Get(m_ecsHandle).dirty = true;
+
+    Transform *parentTransform = GetParentTransformSafe();
+    if (!parentTransform) {
+        store.SetLocalPosition(m_ecsHandle, worldPos);
+    } else {
+        glm::mat4 invParentWorld = glm::inverse(parentTransform->GetWorldMatrix());
+        store.SetLocalPosition(m_ecsHandle, glm::vec3(invParentWorld * glm::vec4(worldPos, 1.0f)));
+    }
+    store.SetDirty(m_ecsHandle, true);
     InvalidateWorldMatrix(false);
 }
 
@@ -65,29 +80,23 @@ void Transform::SetWorldPosition(const glm::vec3 &worldPos)
 // World Matrix
 // ============================================================================
 
-glm::mat4 Transform::GetWorldMatrix() const
+const glm::mat4 &Transform::GetWorldMatrix() const
 {
     auto &store = TransformECSStore::Instance();
-    auto &data = store.Get(m_ecsHandle);
-    if (!data.worldMatrixDirty) {
-        return data.cachedWorldMatrix;
+    if (!store.GetWorldMatrixDirty(m_ecsHandle)) {
+        return store.GetCachedWorldMatrix(m_ecsHandle);
     }
 
     glm::mat4 localMatrix = GetLocalMatrix();
 
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        data.cachedWorldMatrix = localMatrix;
+    Transform *parentTransform = GetParentTransformSafe();
+    if (!parentTransform) {
+        store.SetCachedWorldMatrix(m_ecsHandle, localMatrix);
     } else {
-        Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
-        if (!parentTransform) {
-            data.cachedWorldMatrix = localMatrix;
-        } else {
-            data.cachedWorldMatrix = parentTransform->GetWorldMatrix() * localMatrix;
-        }
+        store.SetCachedWorldMatrix(m_ecsHandle, parentTransform->GetWorldMatrix() * localMatrix);
     }
-
-    data.worldMatrixDirty = false;
-    return data.cachedWorldMatrix;
+    store.SetWorldMatrixDirty(m_ecsHandle, false);
+    return store.GetCachedWorldMatrix(m_ecsHandle);
 }
 
 // ============================================================================
@@ -105,11 +114,12 @@ void Transform::InvalidateWorldMatrix(bool clearWorldEulerExact) const
 
 glm::quat Transform::GetWorldRotation() const
 {
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        return GetLocalRotation();
+    auto &store = TransformECSStore::Instance();
+    if (store.IsFrameCacheActive()) {
+        return store.GetCachedWorldRotation(m_ecsHandle.index);
     }
 
-    Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
+    Transform *parentTransform = GetParentTransformSafe();
     if (!parentTransform) {
         return GetLocalRotation();
     }
@@ -119,89 +129,90 @@ glm::quat Transform::GetWorldRotation() const
 
 void Transform::SetWorldRotation(const glm::quat &worldRot)
 {
-    glm::quat safeRot = glm::normalize(worldRot);
-    glm::quat newLocalRot;
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        newLocalRot = safeRot;
-    } else {
-        Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
-        if (!parentTransform) {
-            newLocalRot = safeRot;
-        } else {
-            newLocalRot = glm::inverse(parentTransform->GetWorldRotation()) * safeRot;
-        }
-    }
-
-    auto &data = TransformECSStore::Instance().Get(m_ecsHandle);
-
-    // Skip only when the quaternion is *exactly* the same (bit-equal).
-    // A floating-point dot-product threshold (e.g. 0.999999) drops tiny
-    // rotations at high frame-rates, causing visible jitter when an
-    // object orbits slowly.
-    if (data.localRotation == newLocalRot) {
+    auto &store = TransformECSStore::Instance();
+    if (store.IsFrameCacheActive()) {
+        store.SetCachedWorldRotation(m_ecsHandle.index, glm::normalize(worldRot));
         return;
     }
 
-    data.localRotation = newLocalRot;
-    data.localEulerAngles = ExtractEulerAnglesNear(newLocalRot, data.localEulerAngles);
-    if (data.hasCachedWorldEulerAngles) {
-        data.cachedWorldEulerAngles = ExtractEulerAnglesNear(worldRot, data.cachedWorldEulerAngles);
+    glm::quat safeRot = glm::normalize(worldRot);
+    glm::quat newLocalRot;
+    Transform *parentTransform = GetParentTransformSafe();
+    if (!parentTransform) {
+        newLocalRot = safeRot;
     } else {
-        data.cachedWorldEulerAngles = ExtractEulerAngles(worldRot);
-        data.hasCachedWorldEulerAngles = true;
+        newLocalRot = glm::inverse(parentTransform->GetWorldRotation()) * safeRot;
     }
-    data.dirty = true;
+
+    // Skip only when the quaternion is *exactly* the same (bit-equal).
+    if (store.GetLocalRotation(m_ecsHandle) == newLocalRot) {
+        return;
+    }
+
+    store.SetLocalRotation(m_ecsHandle, newLocalRot);
+    store.SetLocalEulerAngles(m_ecsHandle, ExtractEulerAnglesNear(newLocalRot, store.GetLocalEulerAngles(m_ecsHandle)));
+    if (store.GetHasCachedWorldEulerAngles(m_ecsHandle)) {
+        store.SetCachedWorldEulerAngles(m_ecsHandle,
+                                        ExtractEulerAnglesNear(worldRot, store.GetCachedWorldEulerAngles(m_ecsHandle)));
+    } else {
+        store.SetCachedWorldEulerAngles(m_ecsHandle, ExtractEulerAngles(worldRot));
+        store.SetHasCachedWorldEulerAngles(m_ecsHandle, true);
+    }
+    store.SetDirty(m_ecsHandle, true);
     InvalidateWorldMatrix(true);
 }
 
 glm::vec3 Transform::GetWorldEulerAngles() const
 {
-    auto &data = TransformECSStore::Instance().Get(m_ecsHandle);
+    auto &store = TransformECSStore::Instance();
 
     // If world euler was set directly (not via quaternion), return the exact value
-    if (data.worldEulerExact) {
-        return ToPublicEulerAngles(data.cachedWorldEulerAngles);
+    if (store.GetWorldEulerExact(m_ecsHandle)) {
+        return ToPublicEulerAngles(store.GetCachedWorldEulerAngles(m_ecsHandle));
     }
 
     glm::quat worldRotation = GetWorldRotation();
-    if (data.hasCachedWorldEulerAngles) {
-        data.cachedWorldEulerAngles = ExtractEulerAnglesNear(worldRotation, data.cachedWorldEulerAngles);
+    if (store.GetHasCachedWorldEulerAngles(m_ecsHandle)) {
+        store.SetCachedWorldEulerAngles(
+            m_ecsHandle, ExtractEulerAnglesNear(worldRotation, store.GetCachedWorldEulerAngles(m_ecsHandle)));
     } else {
-        data.cachedWorldEulerAngles = ExtractEulerAngles(worldRotation);
-        data.hasCachedWorldEulerAngles = true;
+        store.SetCachedWorldEulerAngles(m_ecsHandle, ExtractEulerAngles(worldRotation));
+        store.SetHasCachedWorldEulerAngles(m_ecsHandle, true);
     }
-    return ToPublicEulerAngles(data.cachedWorldEulerAngles);
+    return ToPublicEulerAngles(store.GetCachedWorldEulerAngles(m_ecsHandle));
 }
 
 void Transform::SetWorldEulerAngles(const glm::vec3 &euler)
 {
     glm::quat worldRot = EulerYXZToQuat(euler);
 
-    auto &data = TransformECSStore::Instance().Get(m_ecsHandle);
+    auto &store = TransformECSStore::Instance();
+    if (store.IsFrameCacheActive()) {
+        store.SetCachedWorldRotation(m_ecsHandle.index, worldRot);
+        return;
+    }
+
+    Transform *parentTransform = GetParentTransformSafe();
 
     // Compute local rotation from world rotation (inlined, not via SetWorldRotation,
     // to avoid intermediate euler extraction that could corrupt the exact values).
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        data.localRotation = worldRot;
-        data.localEulerAngles = euler; // root: local == world, store exact
+    if (!parentTransform) {
+        store.SetLocalRotation(m_ecsHandle, worldRot);
+        store.SetLocalEulerAngles(m_ecsHandle, euler); // root: local == world, store exact
     } else {
-        Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
-        if (!parentTransform) {
-            data.localRotation = worldRot;
-            data.localEulerAngles = euler;
-        } else {
-            data.localRotation = glm::inverse(parentTransform->GetWorldRotation()) * worldRot;
-            data.localEulerAngles = ExtractEulerAnglesNear(data.localRotation, data.localEulerAngles);
-        }
+        glm::quat localRot = glm::inverse(parentTransform->GetWorldRotation()) * worldRot;
+        store.SetLocalRotation(m_ecsHandle, localRot);
+        store.SetLocalEulerAngles(m_ecsHandle,
+                                  ExtractEulerAnglesNear(localRot, store.GetLocalEulerAngles(m_ecsHandle)));
     }
 
-    data.dirty = true;
+    store.SetDirty(m_ecsHandle, true);
     InvalidateWorldMatrix(true);
 
     // Set exact world euler AFTER InvalidateWorldMatrix so the cascade doesn't clear it
-    data.cachedWorldEulerAngles = euler;
-    data.hasCachedWorldEulerAngles = true;
-    data.worldEulerExact = true;
+    store.SetCachedWorldEulerAngles(m_ecsHandle, euler);
+    store.SetHasCachedWorldEulerAngles(m_ecsHandle, true);
+    store.SetWorldEulerExact(m_ecsHandle, true);
 }
 
 // ============================================================================
@@ -210,11 +221,7 @@ void Transform::SetWorldEulerAngles(const glm::vec3 &euler)
 
 glm::vec3 Transform::GetWorldScale() const
 {
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        return GetLocalScale();
-    }
-
-    Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
+    Transform *parentTransform = GetParentTransformSafe();
     if (!parentTransform) {
         return GetLocalScale();
     }
@@ -224,21 +231,19 @@ glm::vec3 Transform::GetWorldScale() const
 
 void Transform::SetWorldScale(const glm::vec3 &worldScale)
 {
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        TransformECSStore::Instance().Get(m_ecsHandle).localScale = worldScale;
+    auto &store = TransformECSStore::Instance();
+    Transform *parentTransform = GetParentTransformSafe();
+    if (!parentTransform) {
+        store.SetLocalScale(m_ecsHandle, worldScale);
     } else {
-        Transform *parentTransform = m_gameObject->GetParent()->GetTransform();
-        if (!parentTransform) {
-            TransformECSStore::Instance().Get(m_ecsHandle).localScale = worldScale;
-        } else {
-            glm::vec3 parentScale = parentTransform->GetWorldScale();
-            auto &scale = TransformECSStore::Instance().Get(m_ecsHandle).localScale;
-            scale.x = (std::abs(parentScale.x) > 1e-6f) ? worldScale.x / parentScale.x : worldScale.x;
-            scale.y = (std::abs(parentScale.y) > 1e-6f) ? worldScale.y / parentScale.y : worldScale.y;
-            scale.z = (std::abs(parentScale.z) > 1e-6f) ? worldScale.z / parentScale.z : worldScale.z;
-        }
+        glm::vec3 parentScale = parentTransform->GetWorldScale();
+        glm::vec3 local;
+        local.x = (std::abs(parentScale.x) > 1e-6f) ? worldScale.x / parentScale.x : worldScale.x;
+        local.y = (std::abs(parentScale.y) > 1e-6f) ? worldScale.y / parentScale.y : worldScale.y;
+        local.z = (std::abs(parentScale.z) > 1e-6f) ? worldScale.z / parentScale.z : worldScale.z;
+        store.SetLocalScale(m_ecsHandle, local);
     }
-    TransformECSStore::Instance().Get(m_ecsHandle).dirty = true;
+    store.SetDirty(m_ecsHandle, true);
     InvalidateWorldMatrix(false);
 }
 
@@ -248,17 +253,17 @@ void Transform::SetWorldScale(const glm::vec3 &worldScale)
 
 glm::vec3 Transform::GetWorldForward() const
 {
-    return glm::normalize(GetWorldRotation() * glm::vec3(0.0f, 0.0f, 1.0f));
+    return GetWorldDirection(glm::vec3(0.0f, 0.0f, 1.0f));
 }
 
 glm::vec3 Transform::GetWorldRight() const
 {
-    return glm::normalize(GetWorldRotation() * glm::vec3(1.0f, 0.0f, 0.0f));
+    return GetWorldDirection(glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
 glm::vec3 Transform::GetWorldUp() const
 {
-    return glm::normalize(GetWorldRotation() * glm::vec3(0.0f, 1.0f, 0.0f));
+    return GetWorldDirection(glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
 // ============================================================================
@@ -267,10 +272,7 @@ glm::vec3 Transform::GetWorldUp() const
 
 Transform *Transform::GetParent() const
 {
-    if (!m_gameObject || !m_gameObject->GetParent()) {
-        return nullptr;
-    }
-    return m_gameObject->GetParent()->GetTransform();
+    return GetParentTransformSafe();
 }
 
 void Transform::SetParent(Transform *parent, bool worldPositionStays)
@@ -542,10 +544,10 @@ bool Transform::Deserialize(const std::string &jsonStr)
             SetLocalScale(j["scale"][0].get<float>(), j["scale"][1].get<float>(), j["scale"][2].get<float>());
         }
 
-        auto &data = TransformECSStore::Instance().Get(m_ecsHandle);
-        data.dirty = true;
-        data.hasCachedWorldEulerAngles = false;
-        data.worldEulerExact = false;
+        auto &store = TransformECSStore::Instance();
+        store.SetDirty(m_ecsHandle, true);
+        store.SetHasCachedWorldEulerAngles(m_ecsHandle, false);
+        store.SetWorldEulerExact(m_ecsHandle, false);
         InvalidateWorldMatrix(false);
         return true;
     } catch (const std::exception &e) {
@@ -556,9 +558,9 @@ bool Transform::Deserialize(const std::string &jsonStr)
 void Transform::CloneDataTo(Transform &target) const
 {
     auto &store = TransformECSStore::Instance();
-    const auto &src = store.Get(m_ecsHandle);
-    auto &dst = store.Get(target.m_ecsHandle);
+    const auto src = store.GetSnapshot(m_ecsHandle);
 
+    TransformECSData dst{};
     dst.localPosition = src.localPosition;
     dst.localEulerAngles = src.localEulerAngles;
     dst.localRotation = src.localRotation;
@@ -567,6 +569,8 @@ void Transform::CloneDataTo(Transform &target) const
     dst.hasCachedWorldEulerAngles = false;
     dst.worldEulerExact = false;
     dst.worldMatrixDirty = true;
+    dst.owner = store.GetOwner(target.m_ecsHandle);
+    store.SetSnapshot(target.m_ecsHandle, dst);
 
     target.SetEnabled(IsEnabled());
 }

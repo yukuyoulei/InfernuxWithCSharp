@@ -101,6 +101,10 @@ class PhysicsWorld
     /// Add an existing body to the broadphase (visible to raycasts/queries).
     void AddBodyToBroadphase(uint32_t bodyId, bool isStatic);
 
+    /// Batch-add bodies to the broadphase using Jolt's AddBodiesPrepare/Finalize.
+    /// Much faster than individual AddBodyToBroadphase for large batches (10k+).
+    void AddBodiesBatch(const std::vector<std::pair<uint32_t, bool>> &bodies);
+
     /// Remove a body from the broadphase (body stays alive for re-adding later).
     void RemoveBodyFromBroadphase(uint32_t bodyId);
 
@@ -269,6 +273,14 @@ class PhysicsWorld
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld &) = delete;
     PhysicsWorld &operator=(const PhysicsWorld &) = delete;
+
+    /// @brief Shared overlap implementation for OverlapSphere/OverlapBox.
+    std::vector<Collider *> OverlapShapeImpl(const JPH::Shape &shape, const glm::vec3 &center, uint32_t layerMask,
+                                             bool queryTriggers) const;
+
+    /// @brief Shared shape cast implementation for SphereCast/BoxCast.
+    bool ShapeCastImpl(const JPH::Shape &shape, const glm::vec3 &origin, const glm::vec3 &direction, float maxDistance,
+                       RaycastHit &outHit, uint32_t layerMask, bool queryTriggers) const;
 
     bool m_initialized = false;
 

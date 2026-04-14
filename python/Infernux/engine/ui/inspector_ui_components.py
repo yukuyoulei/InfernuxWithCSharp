@@ -17,6 +17,7 @@ from .inspector_components import _record_property, register_py_component_render
 from Infernux.engine.i18n import t
 from .inspector_utils import field_label, max_label_w, render_compact_section_header, render_compact_section_title, _render_color_bar, render_inspector_checkbox
 from .theme import Theme
+from Infernux.debug import Debug
 
 
 def _igui():
@@ -33,6 +34,60 @@ def _apply_if_changed(comp, field_name: str, current, new_value):
         comp._call_on_validate()
 
 
+def _render_color_field(ctx, comp, field_name: str, label: str, lw: float,
+                        imgui_id: str, *, default=None, allow_hdr: bool = True):
+    """Render a color bar editor and apply changes via undo system.
+
+    Consolidates the repeated get→pad→label→bar→compare→apply pattern.
+    """
+    if default is None:
+        default = [1.0, 1.0, 1.0, 1.0]
+    cur = list(getattr(comp, field_name, None) or default)
+    while len(cur) < 4:
+        cur.append(1.0)
+    field_label(ctx, label, lw)
+    nr, ng, nb, na = _render_color_bar(ctx, imgui_id, cur[0], cur[1], cur[2], cur[3],
+                                       allow_hdr=allow_hdr)
+    new_color = [nr, ng, nb, na]
+    if tuple(new_color) != tuple(cur[:4]):
+        _apply_if_changed(comp, field_name, cur[:4], new_color)
+
+
+def _render_texture_picker(ctx, comp, field_name: str, label: str, lw: float,
+                           imgui_id: str):
+    """Render a texture object-field picker and apply changes."""
+    IGUI = _igui()
+    from .inspector_components import _picker_assets
+
+    tex_path = str(getattr(comp, field_name, "") or "")
+    display = os.path.basename(tex_path) if tex_path else t("igui.none")
+
+    def _on_drop(payload):
+        new_path = str(payload).replace("\\", "/")
+        if new_path != tex_path:
+            _apply_if_changed(comp, field_name, tex_path, new_path)
+
+    def _on_pick(picked_path):
+        new_path = str(picked_path).replace("\\", "/")
+        if new_path != tex_path:
+            _apply_if_changed(comp, field_name, tex_path, new_path)
+
+    def _on_clear():
+        if tex_path:
+            _apply_if_changed(comp, field_name, tex_path, "")
+
+    def _asset_items(filt):
+        return _picker_assets(filt, "*.png", assets_only=True) + _picker_assets(filt, "*.jpg", assets_only=True)
+
+    field_label(ctx, label, lw)
+    IGUI.object_field(
+        ctx, imgui_id, display, "Texture",
+        clickable=False, accept="TEXTURE_FILE",
+        on_drop=_on_drop, picker_asset_items=_asset_items,
+        on_pick=_on_pick, on_clear=_on_clear,
+    )
+
+
 def _get_serializable_raw_field(obj, field_name: str, default=None):
     try:
         data = object.__getattribute__(obj, "__dict__")
@@ -45,7 +100,8 @@ def _get_serializable_raw_field(obj, field_name: str, default=None):
         meta = getattr(cls, "_serialized_fields_", {}).get(field_name)
         if meta is not None:
             return meta.default
-    except Exception:
+    except Exception as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         pass
     return default
 
@@ -152,15 +208,15 @@ def _apply_visual_position(comp, vis_x, vis_y, canvas):
     _apply_if_changed(comp, "y", old_y, new_y)
 
 
-def _apply_size_preserve_visual_position(comp, width, height, canvas):
-    """Update width/height while keeping the current visual top-left fixed."""
+def _apply_size_with_undo(comp, width, height, canvas, resize_fn):
+    """Apply *resize_fn(comp, w, h, cw, ch)*, then record undo for x/y/w/h."""
     cw = float(canvas.reference_width)
     ch = float(canvas.reference_height)
     old_x = comp.x
     old_y = comp.y
     old_w = comp.width
     old_h = comp.height
-    comp.set_size_preserve_visual_position(float(width), float(height), cw, ch)
+    resize_fn(comp, float(width), float(height), cw, ch)
     new_x = comp.x
     new_y = comp.y
     new_w = comp.width
@@ -173,29 +229,18 @@ def _apply_size_preserve_visual_position(comp, width, height, canvas):
     _apply_if_changed(comp, "y", old_y, new_y)
     _apply_if_changed(comp, "width", old_w, new_w)
     _apply_if_changed(comp, "height", old_h, new_h)
+
+
+def _apply_size_preserve_visual_position(comp, width, height, canvas):
+    """Update width/height while keeping the current visual top-left fixed."""
+    _apply_size_with_undo(comp, width, height, canvas,
+                          lambda c, w, h, cw, ch: c.set_size_preserve_visual_position(w, h, cw, ch))
 
 
 def _apply_size_preserve_top_left(comp, width, height, canvas):
     """Update width/height while keeping the rotated top-left corner fixed."""
-    cw = float(canvas.reference_width)
-    ch = float(canvas.reference_height)
-    old_x = comp.x
-    old_y = comp.y
-    old_w = comp.width
-    old_h = comp.height
-    comp.set_size_preserve_corner(float(width), float(height), cw, ch, "top_left")
-    new_x = comp.x
-    new_y = comp.y
-    new_w = comp.width
-    new_h = comp.height
-    comp.x = old_x
-    comp.y = old_y
-    comp.width = old_w
-    comp.height = old_h
-    _apply_if_changed(comp, "x", old_x, new_x)
-    _apply_if_changed(comp, "y", old_y, new_y)
-    _apply_if_changed(comp, "width", old_w, new_w)
-    _apply_if_changed(comp, "height", old_h, new_h)
+    _apply_size_with_undo(comp, width, height, canvas,
+                          lambda c, w, h, cw, ch: c.set_size_preserve_corner(w, h, cw, ch, "top_left"))
 
 
 def _set_native_size(comp):
@@ -372,44 +417,8 @@ def _set_text_resize_mode(ctx, text_comp: UIText, mode: TextResizeMode):
     _sync_text_layout_from_ctx(ctx, text_comp)
 
 
-def _render_common_layout(ctx, comp):
-    if not render_compact_section_header(ctx, t("ui_comp.layout"), level="primary"):
-        return
-
-    labels = [t("ui_comp.dimensions"), t("ui_comp.size"), t("ui_comp.modify")]
-    if isinstance(comp, UIText):
-        labels.append(t("ui_comp.resizing"))
-    section_lw = max_label_w(ctx, labels)
-
-    if isinstance(comp, UIText):
-        _sync_text_layout_from_ctx(ctx, comp)
-
-    render_compact_section_title(ctx, t("ui_comp.dimensions"), level="secondary")
-    field_label(ctx, t("ui_comp.modify"), section_lw)
-
-    # Build button list: Lock is always present;
-    # Set Native Size appears for UIImage / UIButton with texture_path.
-    modify_buttons = [("lock", t("ui_comp.lock"))]
-    has_texture = bool(getattr(comp, "texture_path", "") or "")
-    if has_texture:
-        modify_buttons.append(("native_size", t("ui_comp.set_native_size")))
-
-    clicked = Theme.render_inline_button_row(
-        ctx,
-        "ui_layout_lock_row",
-        modify_buttons,
-        active_items=["lock"] if bool(getattr(comp, "lock_aspect_ratio", False)) else [],
-    )
-    if clicked == "lock":
-        new_lock = not bool(getattr(comp, "lock_aspect_ratio", False))
-        if new_lock and isinstance(comp, UIText) and comp.resize_mode != TextResizeMode.FixedSize:
-            _apply_if_changed(comp, "resize_mode", comp.resize_mode, TextResizeMode.FixedSize)
-        _apply_if_changed(comp, "lock_aspect_ratio", comp.lock_aspect_ratio, new_lock)
-    elif clicked == "native_size" and has_texture:
-        _set_native_size(comp)
-
-    field_label(ctx, t("ui_comp.size"), section_lw)
-    size_x, size_y = ctx.vector2("Size", float(comp.width), float(comp.height), 1.0, section_lw)
+def _apply_layout_size_changes(ctx, comp, size_x, size_y, section_lw):
+    """Apply width/height edits from the layout Size field, honouring lock-aspect and canvas."""
     width_changed = float(size_x) != float(comp.width)
     height_changed = float(size_y) != float(comp.height)
     width_editable = not (isinstance(comp, UIText) and not comp.is_width_editable())
@@ -453,6 +462,47 @@ def _render_common_layout(ctx, comp):
             _sync_text_layout_from_ctx(ctx, comp)
         else:
             _apply_size_preserve_top_left(comp, float(comp.width), target_h, canvas)
+
+
+def _render_common_layout(ctx, comp):
+    if not render_compact_section_header(ctx, t("ui_comp.layout"), level="primary"):
+        return
+
+    labels = [t("ui_comp.dimensions"), t("ui_comp.size"), t("ui_comp.modify")]
+    if isinstance(comp, UIText):
+        labels.append(t("ui_comp.resizing"))
+    section_lw = max_label_w(ctx, labels)
+
+    if isinstance(comp, UIText):
+        _sync_text_layout_from_ctx(ctx, comp)
+
+    render_compact_section_title(ctx, t("ui_comp.dimensions"), level="secondary")
+    field_label(ctx, t("ui_comp.modify"), section_lw)
+
+    # Build button list: Lock is always present;
+    # Set Native Size appears for UIImage / UIButton with texture_path.
+    modify_buttons = [("lock", t("ui_comp.lock"))]
+    has_texture = bool(getattr(comp, "texture_path", "") or "")
+    if has_texture:
+        modify_buttons.append(("native_size", t("ui_comp.set_native_size")))
+
+    clicked = Theme.render_inline_button_row(
+        ctx,
+        "ui_layout_lock_row",
+        modify_buttons,
+        active_items=["lock"] if bool(getattr(comp, "lock_aspect_ratio", False)) else [],
+    )
+    if clicked == "lock":
+        new_lock = not bool(getattr(comp, "lock_aspect_ratio", False))
+        if new_lock and isinstance(comp, UIText) and comp.resize_mode != TextResizeMode.FixedSize:
+            _apply_if_changed(comp, "resize_mode", comp.resize_mode, TextResizeMode.FixedSize)
+        _apply_if_changed(comp, "lock_aspect_ratio", comp.lock_aspect_ratio, new_lock)
+    elif clicked == "native_size" and has_texture:
+        _set_native_size(comp)
+
+    field_label(ctx, t("ui_comp.size"), section_lw)
+    size_x, size_y = ctx.vector2("Size", float(comp.width), float(comp.height), 1.0, section_lw)
+    _apply_layout_size_changes(ctx, comp, size_x, size_y, section_lw)
 
     if isinstance(comp, UIText):
         render_compact_section_title(ctx, t("ui_comp.resizing"), level="secondary")
@@ -515,8 +565,80 @@ def _render_common_appearance(ctx, comp):
             _apply_if_changed(comp, "corner_radius", comp.corner_radius, target_radius)
 
 
-def _render_text_typography(ctx, text_comp: UIText):
+def _render_font_picker(ctx, comp, field_name: str, lw: float, imgui_id: str):
+    """Render a searchable font combo and apply changes.  Returns True when changed."""
     IGUI = _igui()
+    font_path = str(getattr(comp, field_name, "") or "")
+    font_options = _get_project_font_options()
+    font_values = [value for _, value in font_options]
+    font_labels = [label_str for label_str, _ in font_options]
+    if font_path not in font_values and font_path:
+        font_labels.append(font_path)
+        font_values.append(font_path)
+    try:
+        current_font_index = font_values.index(font_path)
+    except ValueError:
+        current_font_index = 0
+    new_font_index = IGUI.searchable_combo(ctx, imgui_id, current_font_index, font_labels)
+    new_font_path = font_values[new_font_index] if 0 <= new_font_index < len(font_values) else font_path
+    if new_font_path != font_path:
+        _apply_if_changed(comp, field_name, font_path, new_font_path)
+        return True
+    return False
+
+
+def _render_text_alignment_row(ctx, comp, lw: float, imgui_id: str,
+                                default_h=None, default_v=None):
+    """Render the horizontal+vertical text alignment button row and apply changes."""
+    if default_h is None:
+        default_h = TextAlignH.Left
+    if default_v is None:
+        default_v = TextAlignV.Top
+    field_label(ctx, t("ui_comp.text_alignment"), lw)
+    horiz = getattr(comp, "text_align_h", default_h)
+    vert = getattr(comp, "text_align_v", default_v)
+    h_map = {
+        int(TextAlignH.Left): "text_left",
+        int(TextAlignH.Center): "text_center_h",
+        int(TextAlignH.Right): "text_right",
+    }
+    v_map = {
+        int(TextAlignV.Top): "text_top",
+        int(TextAlignV.Center): "text_center_v",
+        int(TextAlignV.Bottom): "text_bottom",
+    }
+    active_items = [
+        h_map.get(int(horiz), "text_left"),
+        v_map.get(int(vert), "text_top"),
+    ]
+    clicked = Theme.render_inline_button_row(
+        ctx,
+        imgui_id,
+        [
+            ("text_left", t("ui_comp.text_left")),
+            ("text_center_h", t("ui_comp.text_center")),
+            ("text_right", t("ui_comp.text_right")),
+            ("text_top", t("ui_comp.text_top")),
+            ("text_center_v", t("ui_comp.text_middle")),
+            ("text_bottom", t("ui_comp.text_bottom")),
+        ],
+        active_items=active_items,
+    )
+    if clicked == "text_left":
+        _apply_if_changed(comp, "text_align_h", comp.text_align_h, TextAlignH.Left)
+    elif clicked == "text_center_h":
+        _apply_if_changed(comp, "text_align_h", comp.text_align_h, TextAlignH.Center)
+    elif clicked == "text_right":
+        _apply_if_changed(comp, "text_align_h", comp.text_align_h, TextAlignH.Right)
+    elif clicked == "text_top":
+        _apply_if_changed(comp, "text_align_v", comp.text_align_v, TextAlignV.Top)
+    elif clicked == "text_center_v":
+        _apply_if_changed(comp, "text_align_v", comp.text_align_v, TextAlignV.Center)
+    elif clicked == "text_bottom":
+        _apply_if_changed(comp, "text_align_v", comp.text_align_v, TextAlignV.Bottom)
+
+
+def _render_text_typography(ctx, text_comp: UIText):
     if not render_compact_section_header(ctx, t("ui_comp.typography"), level="primary"):
         return
 
@@ -530,21 +652,7 @@ def _render_text_typography(ctx, text_comp: UIText):
         _sync_text_layout_from_ctx(ctx, text_comp)
 
     field_label(ctx, t("ui_comp.font"), section_lw)
-    font_path = str(getattr(text_comp, "font_path", "") or "")
-    font_options = _get_project_font_options()
-    font_values = [value for _, value in font_options]
-    font_labels = [label for label, _ in font_options]
-    if font_path not in font_values and font_path:
-        font_labels.append(font_path)
-        font_values.append(font_path)
-    try:
-        current_font_index = font_values.index(font_path)
-    except ValueError:
-        current_font_index = 0
-    new_font_index = IGUI.searchable_combo(ctx, "ui_text_font_path", current_font_index, font_labels)
-    new_font_path = font_values[new_font_index] if 0 <= new_font_index < len(font_values) else font_path
-    if new_font_path != font_path:
-        _apply_if_changed(text_comp, "font_path", font_path, new_font_path)
+    if _render_font_picker(ctx, text_comp, "font_path", section_lw, "ui_text_font_path"):
         _sync_text_layout_from_ctx(ctx, text_comp)
 
     field_label(ctx, t("ui_comp.font_size"), section_lw)
@@ -569,62 +677,15 @@ def _render_text_typography(ctx, text_comp: UIText):
         _sync_text_layout_from_ctx(ctx, text_comp)
 
     if render_compact_section_header(ctx, t("ui_comp.text_alignment"), level="secondary"):
-        field_label(ctx, t("ui_comp.text_alignment"), section_lw)
-        active_items = []
-        horiz = getattr(text_comp, "text_align_h", TextAlignH.Left)
-        vert = getattr(text_comp, "text_align_v", TextAlignV.Top)
-        active_items.append({
-            TextAlignH.Left: "text_left",
-            TextAlignH.Center: "text_center_h",
-            TextAlignH.Right: "text_right",
-        }.get(horiz, "text_left"))
-        active_items.append({
-            TextAlignV.Top: "text_top",
-            TextAlignV.Center: "text_center_v",
-            TextAlignV.Bottom: "text_bottom",
-        }.get(vert, "text_top"))
-
-        clicked = Theme.render_inline_button_row(
-            ctx,
-            "ui_text_alignment_row",
-            [
-                ("text_left", t("ui_comp.text_left")),
-                ("text_center_h", t("ui_comp.text_center")),
-                ("text_right", t("ui_comp.text_right")),
-                ("text_top", t("ui_comp.text_top")),
-                ("text_center_v", t("ui_comp.text_middle")),
-                ("text_bottom", t("ui_comp.text_bottom")),
-            ],
-            active_items=active_items,
-        )
-        if clicked == "text_left":
-            _apply_if_changed(text_comp, "text_align_h", text_comp.text_align_h, TextAlignH.Left)
-        elif clicked == "text_center_h":
-            _apply_if_changed(text_comp, "text_align_h", text_comp.text_align_h, TextAlignH.Center)
-        elif clicked == "text_right":
-            _apply_if_changed(text_comp, "text_align_h", text_comp.text_align_h, TextAlignH.Right)
-        elif clicked == "text_top":
-            _apply_if_changed(text_comp, "text_align_v", text_comp.text_align_v, TextAlignV.Top)
-        elif clicked == "text_center_v":
-            _apply_if_changed(text_comp, "text_align_v", text_comp.text_align_v, TextAlignV.Center)
-        elif clicked == "text_bottom":
-            _apply_if_changed(text_comp, "text_align_v", text_comp.text_align_v, TextAlignV.Bottom)
+        _render_text_alignment_row(ctx, text_comp, section_lw, "ui_text_alignment_row")
 
 
 def _render_text_fill(ctx, text_comp: UIText):
     if not render_compact_section_header(ctx, t("ui_comp.fill"), level="primary"):
         return
-
     section_lw = max_label_w(ctx, [t("ui_comp.color")])
-    current = getattr(text_comp, "color", [1.0, 1.0, 1.0, 1.0]) or [1.0, 1.0, 1.0, 1.0]
-    while len(current) < 4:
-        current = list(current) + [1.0]
-
-    field_label(ctx, t("ui_comp.color"), section_lw)
-    nr, ng, nb, na = _render_color_bar(ctx, "##ui_text_fill_color", current[0], current[1], current[2], current[3], allow_hdr=True)
-    new_color = [nr, ng, nb, na]
-    if tuple(new_color) != tuple(current[:4]):
-        _apply_if_changed(text_comp, "color", current[:4], new_color)
+    _render_color_field(ctx, text_comp, "color", t("ui_comp.color"), section_lw,
+                        "##ui_text_fill_color")
 
 
 def _render_canvas_inspector(ctx, canvas: UICanvas):
@@ -716,51 +777,12 @@ def _render_image_fill(ctx, img_comp: UIImage):
 
     section_lw = max_label_w(ctx, [t("ui_comp.texture"), t("ui_comp.color")])
 
-    # ── Texture field with IGUI object field + picker ──
-    field_label(ctx, t("ui_comp.texture"), section_lw)
-    tex_path = str(getattr(img_comp, "texture_path", "") or "")
-    display = os.path.basename(tex_path) if tex_path else t("igui.none")
-    IGUI = _igui()
-    from .inspector_components import _picker_assets
-
-    def _on_tex_drop(payload):
-        new_path = str(payload).replace("\\", "/")
-        if new_path != tex_path:
-            _apply_if_changed(img_comp, "texture_path", tex_path, new_path)
-
-    def _on_tex_pick(picked_path):
-        new_path = str(picked_path).replace("\\", "/")
-        if new_path != tex_path:
-            _apply_if_changed(img_comp, "texture_path", tex_path, new_path)
-
-    def _on_tex_clear():
-        if tex_path:
-            _apply_if_changed(img_comp, "texture_path", tex_path, "")
-
-    def _tex_asset_items(filt):
-        return _picker_assets(filt, "*.png") + _picker_assets(filt, "*.jpg")
-
-    IGUI.object_field(
-        ctx,
-        "ui_image_texture",
-        display, "Texture",
-        clickable=False,
-        accept="TEXTURE_FILE",
-        on_drop=_on_tex_drop,
-        picker_asset_items=_tex_asset_items,
-        on_pick=_on_tex_pick,
-        on_clear=_on_tex_clear,
-    )
+    _render_texture_picker(ctx, img_comp, "texture_path", t("ui_comp.texture"),
+                           section_lw, "ui_image_texture")
 
     # ── Tint color ──
-    current = getattr(img_comp, "color", [1.0, 1.0, 1.0, 1.0]) or [1.0, 1.0, 1.0, 1.0]
-    while len(current) < 4:
-        current = list(current) + [1.0]
-    field_label(ctx, t("ui_comp.color"), section_lw)
-    nr, ng, nb, na = _render_color_bar(ctx, "##ui_image_fill_color", current[0], current[1], current[2], current[3], allow_hdr=True)
-    new_color = [nr, ng, nb, na]
-    if tuple(new_color) != tuple(current[:4]):
-        _apply_if_changed(img_comp, "color", current[:4], new_color)
+    _render_color_field(ctx, img_comp, "color", t("ui_comp.color"), section_lw,
+                        "##ui_image_fill_color")
 
 
 def _render_image_inspector(ctx, img_comp: UIImage):
@@ -778,7 +800,6 @@ register_py_component_renderer("UIImage", _render_image_inspector)
 # ── UIButton inspector ──
 
 def _render_button_inspector(ctx, btn_comp: UIButton):
-    IGUI = _igui()
     _render_common_position(ctx, btn_comp)
     _render_common_layout(ctx, btn_comp)
     _render_common_appearance(ctx, btn_comp)
@@ -800,34 +821,14 @@ def _render_button_inspector(ctx, btn_comp: UIButton):
         _apply_if_changed(btn_comp, "label", btn_comp.label, new_label)
 
         field_label(ctx, t("ui_comp.font"), lw)
-        font_path = str(getattr(btn_comp, "font_path", "") or "")
-        font_options = _get_project_font_options()
-        font_values = [value for _, value in font_options]
-        font_labels = [label_str for label_str, _ in font_options]
-        if font_path not in font_values and font_path:
-            font_labels.append(font_path)
-            font_values.append(font_path)
-        try:
-            current_font_index = font_values.index(font_path)
-        except ValueError:
-            current_font_index = 0
-        new_font_index = IGUI.searchable_combo(ctx, "btn_font_path", current_font_index, font_labels)
-        new_font_path = font_values[new_font_index] if 0 <= new_font_index < len(font_values) else font_path
-        if new_font_path != font_path:
-            _apply_if_changed(btn_comp, "font_path", font_path, new_font_path)
+        _render_font_picker(ctx, btn_comp, "font_path", lw, "btn_font_path")
 
         field_label(ctx, t("ui_comp.font_size"), lw)
         new_fs = ctx.drag_float("##btn_font_size", btn_comp.font_size, 0.5, 4.0, 256.0)
         _apply_if_changed(btn_comp, "font_size", btn_comp.font_size, new_fs)
 
-        field_label(ctx, t("ui_comp.label_color"), lw)
-        cur_lc = list(btn_comp.label_color or [1, 1, 1, 1])
-        while len(cur_lc) < 4:
-            cur_lc.append(1.0)
-        nr, ng, nb, na = _render_color_bar(ctx, "##btn_label_color", cur_lc[0], cur_lc[1], cur_lc[2], cur_lc[3], allow_hdr=True)
-        new_lc = [nr, ng, nb, na]
-        if tuple(new_lc) != tuple(cur_lc[:4]):
-            _apply_if_changed(btn_comp, "label_color", cur_lc[:4], new_lc)
+        _render_color_field(ctx, btn_comp, "label_color", t("ui_comp.label_color"), lw,
+                            "##btn_label_color")
 
         field_label(ctx, t("ui_comp.line_height"), lw)
         new_lh = ctx.drag_float("##btn_line_height", btn_comp.line_height, 0.01, 0.5, 5.0)
@@ -843,95 +844,18 @@ def _render_button_inspector(ctx, btn_comp: UIButton):
 
         # Text alignment buttons
         if render_compact_section_header(ctx, t("ui_comp.text_alignment"), level="secondary"):
-            field_label(ctx, t("ui_comp.text_alignment"), lw)
-            active_items = []
-            horiz = getattr(btn_comp, "text_align_h", TextAlignH.Center)
-            vert = getattr(btn_comp, "text_align_v", TextAlignV.Center)
-            active_items.append({
-                TextAlignH.Left: "text_left",
-                TextAlignH.Center: "text_center_h",
-                TextAlignH.Right: "text_right",
-            }.get(int(horiz), "text_center_h"))
-            active_items.append({
-                TextAlignV.Top: "text_top",
-                TextAlignV.Center: "text_center_v",
-                TextAlignV.Bottom: "text_bottom",
-            }.get(int(vert), "text_center_v"))
-
-            clicked = Theme.render_inline_button_row(
-                ctx,
-                "btn_text_alignment_row",
-                [
-                    ("text_left", t("ui_comp.text_left")),
-                    ("text_center_h", t("ui_comp.text_center")),
-                    ("text_right", t("ui_comp.text_right")),
-                    ("text_top", t("ui_comp.text_top")),
-                    ("text_center_v", t("ui_comp.text_middle")),
-                    ("text_bottom", t("ui_comp.text_bottom")),
-                ],
-                active_items=active_items,
-            )
-            if clicked == "text_left":
-                _apply_if_changed(btn_comp, "text_align_h", btn_comp.text_align_h, TextAlignH.Left)
-            elif clicked == "text_center_h":
-                _apply_if_changed(btn_comp, "text_align_h", btn_comp.text_align_h, TextAlignH.Center)
-            elif clicked == "text_right":
-                _apply_if_changed(btn_comp, "text_align_h", btn_comp.text_align_h, TextAlignH.Right)
-            elif clicked == "text_top":
-                _apply_if_changed(btn_comp, "text_align_v", btn_comp.text_align_v, TextAlignV.Top)
-            elif clicked == "text_center_v":
-                _apply_if_changed(btn_comp, "text_align_v", btn_comp.text_align_v, TextAlignV.Center)
-            elif clicked == "text_bottom":
-                _apply_if_changed(btn_comp, "text_align_v", btn_comp.text_align_v, TextAlignV.Bottom)
+            _render_text_alignment_row(ctx, btn_comp, lw, "btn_text_alignment_row",
+                                        default_h=TextAlignH.Center, default_v=TextAlignV.Center)
 
     # ── Fill ──
     if render_compact_section_header(ctx, t("ui_comp.fill"), level="primary"):
         lw = max_label_w(ctx, [t("ui_comp.texture"), t("ui_comp.background")])
 
-        # Texture field with IGUI object field + picker
-        field_label(ctx, t("ui_comp.texture"), lw)
-        tex_path = str(getattr(btn_comp, "texture_path", "") or "")
-        display = os.path.basename(tex_path) if tex_path else t("igui.none")
-        IGUI = _igui()
-        from .inspector_components import _picker_assets
+        _render_texture_picker(ctx, btn_comp, "texture_path", t("ui_comp.texture"),
+                               lw, "btn_texture")
 
-        def _on_tex_drop(payload):
-            new_path = str(payload).replace("\\", "/")
-            if new_path != tex_path:
-                _apply_if_changed(btn_comp, "texture_path", tex_path, new_path)
-
-        def _on_tex_pick(picked_path):
-            new_path = str(picked_path).replace("\\", "/")
-            if new_path != tex_path:
-                _apply_if_changed(btn_comp, "texture_path", tex_path, new_path)
-
-        def _on_tex_clear():
-            if tex_path:
-                _apply_if_changed(btn_comp, "texture_path", tex_path, "")
-
-        def _tex_asset_items(filt):
-            return _picker_assets(filt, "*.png") + _picker_assets(filt, "*.jpg")
-
-        IGUI.object_field(
-            ctx,
-            "btn_texture",
-            display, "Texture",
-            clickable=False,
-            accept="TEXTURE_FILE",
-            on_drop=_on_tex_drop,
-            picker_asset_items=_tex_asset_items,
-            on_pick=_on_tex_pick,
-            on_clear=_on_tex_clear,
-        )
-
-        field_label(ctx, t("ui_comp.background"), lw)
-        cur_bg = list(btn_comp.background_color or list(Theme.UI_DEFAULT_BUTTON_BG))
-        while len(cur_bg) < 4:
-            cur_bg.append(1.0)
-        nr, ng, nb, na = _render_color_bar(ctx, "##btn_bg_color", cur_bg[0], cur_bg[1], cur_bg[2], cur_bg[3], allow_hdr=True)
-        new_bg = [nr, ng, nb, na]
-        if tuple(new_bg) != tuple(cur_bg[:4]):
-            _apply_if_changed(btn_comp, "background_color", cur_bg[:4], new_bg)
+        _render_color_field(ctx, btn_comp, "background_color", t("ui_comp.background"), lw,
+                            "##btn_bg_color", default=list(Theme.UI_DEFAULT_BUTTON_BG))
 
     # ── Color Tint ──
     if render_compact_section_header(ctx, t("ui_comp.color_tint"), level="secondary"):
@@ -942,64 +866,384 @@ def _render_button_inspector(ctx, btn_comp: UIButton):
             (t("ui_comp.tint_pressed"), "pressed_color"),
             (t("ui_comp.tint_disabled"), "disabled_color"),
         ]:
-            field_label(ctx, label_str, lw)
-            cur = list(getattr(btn_comp, field_name) or [1, 1, 1, 1])
-            while len(cur) < 4:
-                cur.append(1.0)
-            nr, ng, nb, na = _render_color_bar(ctx, f"##btn_{field_name}", cur[0], cur[1], cur[2], cur[3], allow_hdr=True)
-            new_val = [nr, ng, nb, na]
-            if tuple(new_val) != tuple(cur[:4]):
-                _apply_if_changed(btn_comp, field_name, cur[:4], new_val)
+            _render_color_field(ctx, btn_comp, field_name, label_str, lw,
+                                f"##btn_{field_name}")
 
     # ── Events — On Click () ──
     _render_on_click_events(ctx, btn_comp)
 
 
+def _render_onclick_arg_go(ctx, btn_comp, entries, i, arg_index, arg, lw, label,
+                           clone_entries_fn, resolve_go_fn):
+    """Render a game_object On-Click argument field."""
+    from Infernux.components.ref_wrappers import GameObjectRef
+    from .inspector_components import render_object_field, _picker_scene_gameobjects
+
+    target_ref = _get_serializable_raw_field(arg, "game_object")
+    resolved_arg_go = target_ref.resolve() if hasattr(target_ref, "resolve") else None
+    display = resolved_arg_go.name if resolved_arg_go else t("igui.none")
+
+    def _make_cbs(_entry_idx=i, _arg_idx=arg_index):
+        def _set(ref):
+            ne = clone_entries_fn(entries)
+            ne[_entry_idx].arguments[_arg_idx].game_object = ref
+            _apply_if_changed(btn_comp, "on_click_entries", entries, ne)
+
+        def _on_drop(payload):
+            go = resolve_go_fn(payload)
+            if go is not None:
+                _set(GameObjectRef(go))
+
+        return (_on_drop,
+                lambda go: _set(GameObjectRef(go)),
+                lambda: _set(GameObjectRef(persistent_id=0)))
+
+    go_drop, go_pick, go_clear = _make_cbs()
+    field_label(ctx, label, lw)
+    render_object_field(
+        ctx, f"onclick_arg_go_{i}_{arg_index}", display, "GameObject",
+        clickable=False,
+        accept_drag_type="HIERARCHY_GAMEOBJECT",
+        on_drop_callback=go_drop,
+        picker_scene_items=lambda filt: _picker_scene_gameobjects(filt),
+        on_pick=go_pick,
+        on_clear=go_clear,
+    )
+
+
+def _render_onclick_arg_comp(ctx, btn_comp, entries, i, arg_index, spec, arg, lw, label,
+                             clone_entries_fn, resolve_go_fn):
+    """Render a component On-Click argument field."""
+    from Infernux.components.ref_wrappers import ComponentRef
+    from .inspector_components import render_object_field, _picker_scene_gameobjects, _create_component_ref_from_go
+
+    comp_ref = _get_serializable_raw_field(arg, "component")
+    display = comp_ref.display_name if isinstance(comp_ref, ComponentRef) else t("igui.none")
+    type_hint = spec.component_type or "Component"
+
+    def _make_cbs(_entry_idx=i, _arg_idx=arg_index, _comp_type=spec.component_type):
+        def _set(ref):
+            ne = clone_entries_fn(entries)
+            ne[_entry_idx].arguments[_arg_idx].component = ref
+            _apply_if_changed(btn_comp, "on_click_entries", entries, ne)
+
+        def _on_drop(payload):
+            go = resolve_go_fn(payload)
+            if go is None:
+                return
+            ref = _create_component_ref_from_go(go, _comp_type)
+            if ref is not None:
+                _set(ref)
+
+        def _on_pick(go):
+            ref = _create_component_ref_from_go(go, _comp_type)
+            if ref is not None:
+                _set(ref)
+
+        return (_on_drop, _on_pick,
+                lambda: _set(ComponentRef(component_type=_comp_type or "")))
+
+    comp_drop, comp_pick, comp_clear = _make_cbs()
+    field_label(ctx, label, lw)
+    render_object_field(
+        ctx, f"onclick_arg_comp_{i}_{arg_index}", display, type_hint,
+        clickable=False,
+        accept_drag_type="HIERARCHY_GAMEOBJECT",
+        on_drop_callback=comp_drop,
+        picker_scene_items=lambda filt, _ct=spec.component_type: _picker_scene_gameobjects(filt, required_component=_ct),
+        on_pick=comp_pick,
+        on_clear=comp_clear,
+    )
+
+
+def _render_onclick_argument_field(
+    ctx, btn_comp, entries, entry_idx, arg_index, spec, arg, lw,
+    clone_entries_fn, resolve_go_fn,
+):
+    """Render one On Click() event argument field.
+
+    Returns ``(updated_entries, updated_current_args | None, changed)``.
+    """
+    label = f"{spec.display_name}"
+    kind = spec.kind
+    i = entry_idx
+
+    if kind == "bool":
+        new_value = render_inspector_checkbox(ctx, label, bool(arg.bool_value))
+        if bool(new_value) != bool(arg.bool_value):
+            new_entries = clone_entries_fn(entries)
+            new_entries[i].arguments[arg_index].bool_value = bool(new_value)
+            _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+            return new_entries, list(new_entries[i].arguments or []), True
+    elif kind == "int":
+        field_label(ctx, label, lw)
+        new_value = int(ctx.drag_int(f"##onclick_arg_int_{i}_{arg_index}", int(arg.int_value), 1.0, -2147483647, 2147483647))
+        if new_value != int(arg.int_value):
+            new_entries = clone_entries_fn(entries)
+            new_entries[i].arguments[arg_index].int_value = int(new_value)
+            _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+            return new_entries, list(new_entries[i].arguments or []), True
+    elif kind == "float":
+        field_label(ctx, label, lw)
+        new_value = float(ctx.drag_float(f"##onclick_arg_float_{i}_{arg_index}", float(arg.float_value), 0.1, -1000000.0, 1000000.0))
+        if not math.isclose(new_value, float(arg.float_value), rel_tol=1e-5, abs_tol=1e-6):
+            new_entries = clone_entries_fn(entries)
+            new_entries[i].arguments[arg_index].float_value = float(new_value)
+            _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+            return new_entries, list(new_entries[i].arguments or []), True
+    elif kind == "game_object":
+        _render_onclick_arg_go(ctx, btn_comp, entries, i, arg_index, arg, lw, label,
+                               clone_entries_fn, resolve_go_fn)
+    elif kind == "component":
+        _render_onclick_arg_comp(ctx, btn_comp, entries, i, arg_index, spec, arg, lw, label,
+                                 clone_entries_fn, resolve_go_fn)
+    else:
+        field_label(ctx, label, lw)
+        new_value = ctx.text_input(f"##onclick_arg_str_{i}_{arg_index}", str(arg.string_value or ""), 1024)
+        if new_value != str(arg.string_value or ""):
+            new_entries = clone_entries_fn(entries)
+            new_entries[i].arguments[arg_index].string_value = new_value
+            _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+            return new_entries, list(new_entries[i].arguments or []), True
+
+    return entries, None, False
+
+
+def _clone_onclick_argument(arg):
+    """Clone a UIEventArgument without deepcopy of C++ objects."""
+    from Infernux.ui.ui_event_entry import UIEventArgument
+    return UIEventArgument(
+        kind=getattr(arg, "kind", "string") or "string",
+        name=getattr(arg, "name", "") or "",
+        component_type=getattr(arg, "component_type", "") or "",
+        int_value=int(getattr(arg, "int_value", 0) or 0),
+        float_value=float(getattr(arg, "float_value", 0.0) or 0.0),
+        bool_value=bool(getattr(arg, "bool_value", False)),
+        string_value=getattr(arg, "string_value", "") or "",
+        game_object=copy.deepcopy(_get_serializable_raw_field(arg, "game_object"), {}),
+        component=copy.deepcopy(_get_serializable_raw_field(arg, "component"), {}),
+    )
+
+
+def _clone_onclick_entry(e):
+    """Clone a UIEventEntry without deepcopy (avoids pickling C++ objects)."""
+    from Infernux.ui.ui_event_entry import UIEventEntry
+    from Infernux.components.ref_wrappers import GameObjectRef
+    target_ref = _get_serializable_raw_field(e, "target")
+    pid = getattr(target_ref, "persistent_id", 0) or 0
+    return UIEventEntry(
+        target=GameObjectRef(persistent_id=pid),
+        component_name=getattr(e, "component_name", "") or "",
+        method_name=getattr(e, "method_name", "") or "",
+        arguments=[_clone_onclick_argument(arg) for arg in (getattr(e, "arguments", None) or [])],
+    )
+
+
+def _clone_onclick_entries(lst):
+    return [_clone_onclick_entry(e) for e in lst]
+
+
+def _resolve_onclick_go(payload):
+    """Resolve a hierarchy drag payload to a GameObject."""
+    from Infernux.lib import SceneManager
+    scene = SceneManager.instance().get_active_scene()
+    if not scene:
+        return None
+    obj_id = int(payload) if isinstance(payload, (int, float)) else None
+    if obj_id is None:
+        return None
+    return scene.find_by_id(obj_id)
+
+
+def _render_onclick_target_field(ctx, btn_comp, entries, i, entry, lw):
+    """Render the target GameObject field for one On Click entry.
+
+    Returns ``(on_drop, on_pick, on_clear, resolved_go)``.
+    """
+    from Infernux.components.ref_wrappers import GameObjectRef
+    from .inspector_components import render_object_field, _picker_scene_gameobjects
+
+    target_ref = _get_serializable_raw_field(entry, "target")
+    resolved_go = target_ref.resolve() if hasattr(target_ref, "resolve") else None
+    display = resolved_go.name if resolved_go else t("igui.none")
+
+    def _make_target_cbs(_idx=i):
+        def _set(ref):
+            old_entries = list(btn_comp.on_click_entries or [])
+            new_entries = _clone_onclick_entries(old_entries)
+            if _idx >= len(new_entries):
+                return
+            new_entries[_idx].target = ref
+            new_entries[_idx].component_name = ""
+            new_entries[_idx].method_name = ""
+            _record_property(btn_comp, "on_click_entries",
+                             old_entries, new_entries, "Set on_click_entries")
+            if hasattr(btn_comp, "_call_on_validate"):
+                btn_comp._call_on_validate()
+
+        def _on_drop(payload):
+            go = _resolve_onclick_go(payload)
+            if go is not None:
+                _set(GameObjectRef(go))
+
+        return (_on_drop,
+                lambda go: _set(GameObjectRef(go)),
+                lambda: _set(GameObjectRef(persistent_id=0)))
+
+    on_drop, on_pick, on_clear = _make_target_cbs()
+
+    field_label(ctx, t("ui_comp.target"), lw)
+    render_object_field(
+        ctx, f"onclick_target_{i}", display, "GameObject",
+        clickable=False,
+        accept_drag_type="HIERARCHY_GAMEOBJECT",
+        on_drop_callback=on_drop,
+        picker_scene_items=lambda filt: _picker_scene_gameobjects(filt),
+        on_pick=on_pick,
+        on_clear=on_clear,
+    )
+    return resolved_go
+
+
+def _render_onclick_arguments(ctx, btn_comp, entries, i, entry, lw,
+                              selected_component, cur_method):
+    """Render the arguments section for one On Click entry.
+
+    Returns ``(entries, changed)``.
+    """
+    from Infernux.ui.ui_event_entry import get_method_parameter_specs, normalize_event_arguments
+    changed = False
+
+    if selected_component is None or not (getattr(entry, "method_name", "") or ""):
+        return entries, changed
+
+    specs = get_method_parameter_specs(selected_component, getattr(entry, "method_name", "") or "")
+    current_args = list(getattr(entry, "arguments", None) or [])
+    normalized_args = normalize_event_arguments(current_args, specs)
+    if normalized_args != current_args:
+        new_entries = _clone_onclick_entries(entries)
+        new_entries[i].arguments = normalized_args
+        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+        entries = new_entries
+        entry = new_entries[i]
+        current_args = list(entry.arguments or [])
+        changed = True
+    else:
+        current_args = normalized_args
+
+    if specs:
+        if render_compact_section_header(ctx, t("ui_comp.arguments"), level="secondary"):
+            field_label(ctx, t("ui_comp.arguments"), lw)
+            ctx.label(t("ui_comp.params_count").format(n=len(specs)))
+            for arg_index, spec in enumerate(specs):
+                arg = current_args[arg_index]
+                ctx.push_id(arg_index)
+                entries, _upd, _ch = _render_onclick_argument_field(
+                    ctx, btn_comp, entries, i, arg_index, spec, arg, lw,
+                    _clone_onclick_entries, _resolve_onclick_go,
+                )
+                if _ch:
+                    current_args = _upd
+                    changed = True
+                ctx.pop_id()
+    elif cur_method:
+        field_label(ctx, t("ui_comp.arguments"), lw)
+        ctx.label(t("ui_comp.no_parameters"))
+
+    return entries, changed
+
+
+def _render_onclick_entry(ctx, btn_comp, entries, i, entry, lw):
+    """Render one On Click entry (target, component, method, arguments).
+
+    Returns ``(updated_entries, changed)``.
+    """
+    from Infernux.ui.ui_event_entry import get_callable_methods, get_method_parameter_specs, normalize_event_arguments
+
+    changed = False
+
+    # ── Target GameObject ──
+    resolved_go = _render_onclick_target_field(ctx, btn_comp, entries, i, entry, lw)
+
+    # ── Component combo ──
+    comp_names = []
+    if resolved_go:
+        for py_comp in resolved_go.get_py_components():
+            cname = type(py_comp).__name__
+            if cname not in comp_names:
+                comp_names.append(cname)
+
+    cur_comp_name = getattr(entry, "component_name", "") or ""
+    comp_labels = [t("ui_comp.none")] + comp_names
+    comp_values = [""] + comp_names
+    try:
+        comp_idx = comp_values.index(cur_comp_name)
+    except ValueError:
+        comp_idx = 0
+
+    field_label(ctx, t("ui_comp.component"), lw)
+    new_comp_idx = ctx.combo(f"##onclick_comp_{i}", comp_idx, comp_labels, -1)
+    new_comp_name = comp_values[new_comp_idx] if 0 <= new_comp_idx < len(comp_values) else cur_comp_name
+    if new_comp_name != cur_comp_name:
+        new_entries = _clone_onclick_entries(entries)
+        new_entries[i].component_name = new_comp_name
+        new_entries[i].method_name = ""
+        new_entries[i].arguments = []
+        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+        entries = new_entries
+        changed = True
+
+    # ── Method combo ──
+    method_names = []
+    selected_component = None
+    if resolved_go and cur_comp_name:
+        for py_comp in resolved_go.get_py_components():
+            if type(py_comp).__name__ == cur_comp_name:
+                selected_component = py_comp
+                method_names = get_callable_methods(py_comp)
+                break
+
+    cur_method = getattr(entry, "method_name", "") or ""
+    method_labels = [t("ui_comp.none")] + method_names
+    method_values = [""] + method_names
+    try:
+        method_idx = method_values.index(cur_method)
+    except ValueError:
+        method_idx = 0
+
+    field_label(ctx, t("ui_comp.method"), lw)
+    new_method_idx = ctx.combo(f"##onclick_method_{i}", method_idx, method_labels, -1)
+    new_method = method_values[new_method_idx] if 0 <= new_method_idx < len(method_values) else cur_method
+    if new_method != cur_method:
+        new_entries = _clone_onclick_entries(entries)
+        new_entries[i].method_name = new_method
+        if selected_component is not None and new_method:
+            specs = get_method_parameter_specs(selected_component, new_method)
+            new_entries[i].arguments = normalize_event_arguments([], specs)
+        else:
+            new_entries[i].arguments = []
+        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
+        entries = new_entries
+        changed = True
+
+    # ── Arguments ──
+    entries, args_changed = _render_onclick_arguments(
+        ctx, btn_comp, entries, i, entry, lw, selected_component, cur_method)
+    changed = changed or args_changed
+
+    return entries, changed
+
+
 def _render_on_click_events(ctx, btn_comp):
     """Render the Unity-style On Click () persistent event list."""
     IGUI = _igui()
-    from .inspector_components import render_object_field, _picker_scene_gameobjects, _create_component_ref_from_go
-    from Infernux.components.ref_wrappers import GameObjectRef, ComponentRef
-    from Infernux.ui.ui_event_entry import (
-        UIEventEntry,
-        UIEventArgument,
-        get_callable_methods,
-        get_method_parameter_specs,
-        normalize_event_arguments,
-    )
-
-    def _clone_argument(arg):
-        return UIEventArgument(
-            kind=getattr(arg, "kind", "string") or "string",
-            name=getattr(arg, "name", "") or "",
-            component_type=getattr(arg, "component_type", "") or "",
-            int_value=int(getattr(arg, "int_value", 0) or 0),
-            float_value=float(getattr(arg, "float_value", 0.0) or 0.0),
-            bool_value=bool(getattr(arg, "bool_value", False)),
-            string_value=getattr(arg, "string_value", "") or "",
-            game_object=copy.deepcopy(_get_serializable_raw_field(arg, "game_object"), {}),
-            component=copy.deepcopy(_get_serializable_raw_field(arg, "component"), {}),
-        )
-
-    def _clone_entry(e):
-        """Clone a UIEventEntry without deepcopy (avoids pickling C++ objects)."""
-        target_ref = _get_serializable_raw_field(e, "target")
-        pid = getattr(target_ref, "persistent_id", 0) or 0
-        return UIEventEntry(
-            target=GameObjectRef(persistent_id=pid),
-            component_name=getattr(e, "component_name", "") or "",
-            method_name=getattr(e, "method_name", "") or "",
-            arguments=[_clone_argument(arg) for arg in (getattr(e, "arguments", None) or [])],
-        )
-
-    def _clone_entries(lst):
-        return [_clone_entry(e) for e in lst]
+    from Infernux.ui.ui_event_entry import UIEventEntry
 
     entries = list(btn_comp.on_click_entries or [])
 
     def _on_add():
         old_entries = list(btn_comp.on_click_entries or [])
-        new_entries = _clone_entries(old_entries)
+        new_entries = _clone_onclick_entries(old_entries)
         new_entries.append(UIEventEntry())
         _record_property(btn_comp, "on_click_entries",
                          old_entries, new_entries, "Set on_click_entries")
@@ -1016,18 +1260,15 @@ def _render_on_click_events(ctx, btn_comp):
 
     _BTN_W = 24.0
     remove_index = None
-    changed = False
     lw = max_label_w(ctx, [t("ui_comp.target"), t("ui_comp.component"), t("ui_comp.method"), t("ui_comp.arguments")])
 
     for i, entry in enumerate(entries):
         ctx.push_id(i)
 
-        # Collapsible per-entry header with right-aligned [-]
         entry_open = render_compact_section_header(
             ctx, t("ui_comp.click_entry").format(n=i + 1), level="tertiary", allow_overlap=True,
         )
 
-        # Right-aligned remove button on the header row
         ctx.same_line(0, 0)
         avail_w = ctx.get_content_region_avail_width()
         if avail_w >= _BTN_W:
@@ -1039,311 +1280,13 @@ def _render_on_click_events(ctx, btn_comp):
         ctx.pop_style_color(color_count)
 
         if entry_open:
-            # ── Target GameObject ──
-            target_ref = _get_serializable_raw_field(entry, "target")
-            resolved_go = target_ref.resolve() if hasattr(target_ref, "resolve") else None
-            display = resolved_go.name if resolved_go else t("igui.none")
-
-            def _make_drop_cb(_idx=i):
-                def _on_drop(payload):
-                    from Infernux.lib import SceneManager
-                    scene = SceneManager.instance().get_active_scene()
-                    if not scene:
-                        return
-                    obj_id = int(payload) if isinstance(payload, (int, float)) else None
-                    if obj_id is None:
-                        return
-                    go = scene.find_by_id(obj_id)
-                    if go is None:
-                        return
-                    old_entries = list(btn_comp.on_click_entries or [])
-                    new_entries = _clone_entries(old_entries)
-                    if _idx >= len(new_entries):
-                        return
-                    new_entries[_idx].target = GameObjectRef(go)
-                    new_entries[_idx].component_name = ""
-                    new_entries[_idx].method_name = ""
-                    _record_property(btn_comp, "on_click_entries",
-                                     old_entries, new_entries, "Set on_click_entries")
-                    if hasattr(btn_comp, "_call_on_validate"):
-                        btn_comp._call_on_validate()
-                return _on_drop
-
-            def _make_pick_cb(_idx=i):
-                def _on_pick(go):
-                    old_entries = list(btn_comp.on_click_entries or [])
-                    new_entries = _clone_entries(old_entries)
-                    if _idx >= len(new_entries):
-                        return
-                    new_entries[_idx].target = GameObjectRef(go)
-                    new_entries[_idx].component_name = ""
-                    new_entries[_idx].method_name = ""
-                    _record_property(btn_comp, "on_click_entries",
-                                     old_entries, new_entries, "Set on_click_entries")
-                    if hasattr(btn_comp, "_call_on_validate"):
-                        btn_comp._call_on_validate()
-                return _on_pick
-
-            def _make_clear_cb(_idx=i):
-                def _on_clear():
-                    old_entries = list(btn_comp.on_click_entries or [])
-                    new_entries = _clone_entries(old_entries)
-                    if _idx >= len(new_entries):
-                        return
-                    new_entries[_idx].target = GameObjectRef(persistent_id=0)
-                    new_entries[_idx].component_name = ""
-                    new_entries[_idx].method_name = ""
-                    _record_property(btn_comp, "on_click_entries",
-                                     old_entries, new_entries, "Set on_click_entries")
-                    if hasattr(btn_comp, "_call_on_validate"):
-                        btn_comp._call_on_validate()
-                return _on_clear
-
-            field_label(ctx, t("ui_comp.target"), lw)
-            render_object_field(
-                ctx, f"onclick_target_{i}", display, "GameObject",
-                clickable=False,
-                accept_drag_type="HIERARCHY_GAMEOBJECT",
-                on_drop_callback=_make_drop_cb(),
-                picker_scene_items=lambda filt: _picker_scene_gameobjects(filt),
-                on_pick=_make_pick_cb(),
-                on_clear=_make_clear_cb(),
-            )
-
-            # ── Component combo ──
-            comp_names = []
-            if resolved_go:
-                for py_comp in resolved_go.get_py_components():
-                    cname = type(py_comp).__name__
-                    if cname not in comp_names:
-                        comp_names.append(cname)
-
-            cur_comp_name = getattr(entry, "component_name", "") or ""
-            comp_labels = [t("ui_comp.none")] + comp_names
-            comp_values = [""] + comp_names
-            try:
-                comp_idx = comp_values.index(cur_comp_name)
-            except ValueError:
-                comp_idx = 0
-
-            field_label(ctx, t("ui_comp.component"), lw)
-            new_comp_idx = ctx.combo(f"##onclick_comp_{i}", comp_idx, comp_labels, -1)
-            new_comp_name = comp_values[new_comp_idx] if 0 <= new_comp_idx < len(comp_values) else cur_comp_name
-            if new_comp_name != cur_comp_name:
-                new_entries = _clone_entries(entries)
-                new_entries[i].component_name = new_comp_name
-                new_entries[i].method_name = ""
-                new_entries[i].arguments = []
-                _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                entries = new_entries
-                changed = True
-
-            # ── Method combo ──
-            method_names = []
-            selected_component = None
-            if resolved_go and cur_comp_name:
-                for py_comp in resolved_go.get_py_components():
-                    if type(py_comp).__name__ == cur_comp_name:
-                        selected_component = py_comp
-                        method_names = get_callable_methods(py_comp)
-                        break
-
-            cur_method = getattr(entry, "method_name", "") or ""
-            method_labels = [t("ui_comp.none")] + method_names
-            method_values = [""] + method_names
-            try:
-                method_idx = method_values.index(cur_method)
-            except ValueError:
-                method_idx = 0
-
-            field_label(ctx, t("ui_comp.method"), lw)
-            new_method_idx = ctx.combo(f"##onclick_method_{i}", method_idx, method_labels, -1)
-            new_method = method_values[new_method_idx] if 0 <= new_method_idx < len(method_values) else cur_method
-            if new_method != cur_method:
-                new_entries = _clone_entries(entries)
-                new_entries[i].method_name = new_method
-                if selected_component is not None and new_method:
-                    specs = get_method_parameter_specs(selected_component, new_method)
-                    new_entries[i].arguments = normalize_event_arguments([], specs)
-                else:
-                    new_entries[i].arguments = []
-                _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                entries = new_entries
-                changed = True
-
-            if selected_component is not None and (getattr(entry, "method_name", "") or ""):
-                specs = get_method_parameter_specs(selected_component, getattr(entry, "method_name", "") or "")
-                current_args = list(getattr(entry, "arguments", None) or [])
-                normalized_args = normalize_event_arguments(current_args, specs)
-                if normalized_args != current_args:
-                    new_entries = _clone_entries(entries)
-                    new_entries[i].arguments = normalized_args
-                    _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                    entries = new_entries
-                    entry = new_entries[i]
-                    current_args = list(entry.arguments or [])
-                    changed = True
-                else:
-                    current_args = normalized_args
-
-                if specs:
-                    if render_compact_section_header(ctx, t("ui_comp.arguments"), level="secondary"):
-                        field_label(ctx, t("ui_comp.arguments"), lw)
-                        ctx.label(t("ui_comp.params_count").format(n=len(specs)))
-                        for arg_index, spec in enumerate(specs):
-                            arg = current_args[arg_index]
-                            ctx.push_id(arg_index)
-                            label = f"{spec.display_name}"
-                            kind = spec.kind
-
-                            if kind == "bool":
-                                new_value = render_inspector_checkbox(ctx, label, bool(arg.bool_value))
-                                if bool(new_value) != bool(arg.bool_value):
-                                    new_entries = _clone_entries(entries)
-                                    new_entries[i].arguments[arg_index].bool_value = bool(new_value)
-                                    _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                                    entries = new_entries
-                                    current_args = list(new_entries[i].arguments or [])
-                                    changed = True
-                            elif kind == "int":
-                                field_label(ctx, label, lw)
-                                new_value = int(ctx.drag_int(f"##onclick_arg_int_{i}_{arg_index}", int(arg.int_value), 1.0, -2147483647, 2147483647))
-                                if new_value != int(arg.int_value):
-                                    new_entries = _clone_entries(entries)
-                                    new_entries[i].arguments[arg_index].int_value = int(new_value)
-                                    _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                                    entries = new_entries
-                                    current_args = list(new_entries[i].arguments or [])
-                                    changed = True
-                            elif kind == "float":
-                                field_label(ctx, label, lw)
-                                new_value = float(ctx.drag_float(f"##onclick_arg_float_{i}_{arg_index}", float(arg.float_value), 0.1, -1000000.0, 1000000.0))
-                                if not math.isclose(new_value, float(arg.float_value), rel_tol=1e-5, abs_tol=1e-6):
-                                    new_entries = _clone_entries(entries)
-                                    new_entries[i].arguments[arg_index].float_value = float(new_value)
-                                    _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                                    entries = new_entries
-                                    current_args = list(new_entries[i].arguments or [])
-                                    changed = True
-                            elif kind == "game_object":
-                                target_ref = _get_serializable_raw_field(arg, "game_object")
-                                resolved_arg_go = target_ref.resolve() if hasattr(target_ref, "resolve") else None
-                                display = resolved_arg_go.name if resolved_arg_go else t("igui.none")
-
-                                def _make_arg_go_drop_cb(_entry_idx=i, _arg_idx=arg_index):
-                                    def _on_drop(payload):
-                                        from Infernux.lib import SceneManager
-                                        scene = SceneManager.instance().get_active_scene()
-                                        if not scene:
-                                            return
-                                        obj_id = int(payload) if isinstance(payload, (int, float)) else None
-                                        if obj_id is None:
-                                            return
-                                        go = scene.find_by_id(obj_id)
-                                        if go is None:
-                                            return
-                                        new_entries_local = _clone_entries(entries)
-                                        new_entries_local[_entry_idx].arguments[_arg_idx].game_object = GameObjectRef(go)
-                                        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries_local)
-                                    return _on_drop
-
-                                def _make_arg_go_pick_cb(_entry_idx=i, _arg_idx=arg_index):
-                                    def _on_pick(go):
-                                        new_entries_local = _clone_entries(entries)
-                                        new_entries_local[_entry_idx].arguments[_arg_idx].game_object = GameObjectRef(go)
-                                        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries_local)
-                                    return _on_pick
-
-                                def _make_arg_go_clear_cb(_entry_idx=i, _arg_idx=arg_index):
-                                    def _on_clear():
-                                        new_entries_local = _clone_entries(entries)
-                                        new_entries_local[_entry_idx].arguments[_arg_idx].game_object = GameObjectRef(persistent_id=0)
-                                        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries_local)
-                                    return _on_clear
-
-                                field_label(ctx, label, lw)
-                                render_object_field(
-                                    ctx, f"onclick_arg_go_{i}_{arg_index}", display, "GameObject",
-                                    clickable=False,
-                                    accept_drag_type="HIERARCHY_GAMEOBJECT",
-                                    on_drop_callback=_make_arg_go_drop_cb(),
-                                    picker_scene_items=lambda filt: _picker_scene_gameobjects(filt),
-                                    on_pick=_make_arg_go_pick_cb(),
-                                    on_clear=_make_arg_go_clear_cb(),
-                                )
-                            elif kind == "component":
-                                comp_ref = _get_serializable_raw_field(arg, "component")
-                                display = comp_ref.display_name if isinstance(comp_ref, ComponentRef) else t("igui.none")
-                                type_hint = spec.component_type or "Component"
-
-                                def _make_arg_comp_drop_cb(_entry_idx=i, _arg_idx=arg_index, _comp_type=spec.component_type):
-                                    def _on_drop(payload):
-                                        from Infernux.lib import SceneManager
-                                        scene = SceneManager.instance().get_active_scene()
-                                        if not scene:
-                                            return
-                                        obj_id = int(payload) if isinstance(payload, (int, float)) else None
-                                        if obj_id is None:
-                                            return
-                                        go = scene.find_by_id(obj_id)
-                                        if go is None:
-                                            return
-                                        ref = _create_component_ref_from_go(go, _comp_type)
-                                        if ref is None:
-                                            return
-                                        new_entries_local = _clone_entries(entries)
-                                        new_entries_local[_entry_idx].arguments[_arg_idx].component = ref
-                                        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries_local)
-                                    return _on_drop
-
-                                def _make_arg_comp_pick_cb(_entry_idx=i, _arg_idx=arg_index, _comp_type=spec.component_type):
-                                    def _on_pick(go):
-                                        ref = _create_component_ref_from_go(go, _comp_type)
-                                        if ref is None:
-                                            return
-                                        new_entries_local = _clone_entries(entries)
-                                        new_entries_local[_entry_idx].arguments[_arg_idx].component = ref
-                                        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries_local)
-                                    return _on_pick
-
-                                def _make_arg_comp_clear_cb(_entry_idx=i, _arg_idx=arg_index, _comp_type=spec.component_type):
-                                    def _on_clear():
-                                        new_entries_local = _clone_entries(entries)
-                                        new_entries_local[_entry_idx].arguments[_arg_idx].component = ComponentRef(component_type=_comp_type or "")
-                                        _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries_local)
-                                    return _on_clear
-
-                                field_label(ctx, label, lw)
-                                render_object_field(
-                                    ctx, f"onclick_arg_comp_{i}_{arg_index}", display, type_hint,
-                                    clickable=False,
-                                    accept_drag_type="HIERARCHY_GAMEOBJECT",
-                                    on_drop_callback=_make_arg_comp_drop_cb(),
-                                    picker_scene_items=lambda filt, _ct=spec.component_type: _picker_scene_gameobjects(filt, required_component=_ct),
-                                    on_pick=_make_arg_comp_pick_cb(),
-                                    on_clear=_make_arg_comp_clear_cb(),
-                                )
-                            else:
-                                field_label(ctx, label, lw)
-                                new_value = ctx.text_input(f"##onclick_arg_str_{i}_{arg_index}", str(arg.string_value or ""), 1024)
-                                if new_value != str(arg.string_value or ""):
-                                    new_entries = _clone_entries(entries)
-                                    new_entries[i].arguments[arg_index].string_value = new_value
-                                    _apply_if_changed(btn_comp, "on_click_entries", entries, new_entries)
-                                    entries = new_entries
-                                    current_args = list(new_entries[i].arguments or [])
-                                    changed = True
-
-                            ctx.pop_id()
-                elif cur_method:
-                    field_label(ctx, t("ui_comp.arguments"), lw)
-                    ctx.label(t("ui_comp.no_parameters"))
+            entries, _changed = _render_onclick_entry(ctx, btn_comp, entries, i, entry, lw)
 
         ctx.pop_id()
 
     if remove_index is not None:
         old_entries = list(btn_comp.on_click_entries or [])
-        new_entries = [_clone_entry(e) for j, e in enumerate(old_entries) if j != remove_index]
+        new_entries = [_clone_onclick_entry(e) for j, e in enumerate(old_entries) if j != remove_index]
         _record_property(btn_comp, "on_click_entries",
                          old_entries, new_entries, "Set on_click_entries")
         if hasattr(btn_comp, "_call_on_validate"):

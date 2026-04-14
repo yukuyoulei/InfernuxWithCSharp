@@ -1,5 +1,6 @@
 #include "InxView.h"
 
+#include <chrono>
 #include <iostream>
 
 #include <imgui_impl_sdl3.h>
@@ -44,44 +45,174 @@ void InxView::ProcessEvent()
     InputManager::Instance().SetWindow(m_window);
     InputManager::Instance().BeginFrame();
 
-    SDL_Event event{};
-    while (SDL_PollEvent(&event)) {
+    // ====================================================================
+    // Frame-rate limiter
+    //
+    // Three tiers:
+    //   play mode      → no sleep, full speed (bypass entirely)
+    //   editor active  → hard cap to editorFpsCap via SDL_Delay
+    //   editor idle    → sleep via SDL_WaitEventTimeout, wake on input
+    //
+    // We measure elapsed time since the last frame start and sleep only
+    // for the *remaining* budget.  Active mode uses SDL_Delay (hard cap);
+    // idle mode uses SDL_WaitEventTimeout with a real event struct so the
+    // thread wakes immediately on user input and no events are lost.
+    // ====================================================================
+    m_idling.isIdling = false;
+
+    FramePacingSample pacing{};
+    pacing.playModeBypass = m_isPlayMode;
+    pacing.cooldownRemaining = m_activeFramesRemaining;
+
+    SDL_Event firstEvent{};
+    bool gotFirstEvent = false;
+
+    if (!m_isPlayMode) {
+        bool isIdle = m_idling.enableIdling && m_idling.fpsIdle > 0.0f && m_activeFramesRemaining <= 0;
+        float targetFps = isIdle ? m_idling.fpsIdle : m_idling.editorFpsCap;
+
+        pacing.idleMode = isIdle;
+        pacing.targetFps = targetFps;
+
+        if (targetFps > 0.0f) {
+            auto now = std::chrono::steady_clock::now();
+            double elapsed = std::chrono::duration<double>(now - m_lastFrameStart).count();
+            double budget = 1.0 / static_cast<double>(targetFps);
+            double requestedSleepMs = (budget - elapsed) * 1000.0;
+            int sleepMs = static_cast<int>(requestedSleepMs);
+
+            pacing.elapsedBeforeSleepMs = elapsed * 1000.0;
+            pacing.frameBudgetMs = budget * 1000.0;
+            pacing.requestedSleepMs = requestedSleepMs > 0.0 ? requestedSleepMs : 0.0;
+
+            if (sleepMs > 0) {
+                if (isIdle) {
+                    // Idle: block until an event arrives OR the timeout expires.
+                    // A real event struct is used so the event data is preserved.
+                    auto sleepStart = std::chrono::steady_clock::now();
+                    gotFirstEvent = SDL_WaitEventTimeout(&firstEvent, sleepMs);
+
+                    auto sleepEnd = std::chrono::steady_clock::now();
+                    double actualSleepMs = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
+                    pacing.slept = true;
+                    pacing.wokeByEvent = gotFirstEvent;
+                    pacing.actualSleepMs = actualSleepMs;
+
+                    m_idling.isIdling = (actualSleepMs > pacing.frameBudgetMs * 0.9);
+                } else {
+                    // Active editor: hard sleep for the remaining frame budget.
+                    auto sleepStart = std::chrono::steady_clock::now();
+                    SDL_Delay(sleepMs);
+                    auto sleepEnd = std::chrono::steady_clock::now();
+                    pacing.slept = true;
+                    pacing.actualSleepMs = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
+                }
+            }
+        }
+    }
+
+    // Always keep m_lastFrameStart current (even in play mode) so the
+    // first editor frame after exiting play mode doesn't see a huge elapsed.
+    m_lastFrameStart = std::chrono::steady_clock::now();
+
+    // ---- Poll & process all pending events ----
+    bool hadInputEvent = false;
+
+    auto processOneEvent = [&](SDL_Event &e) {
         bool forwardToImGui = true;
         if (InputManager::Instance().IsEditorMouseCaptureActive()) {
-            switch (event.type) {
-            case SDL_EVENT_MOUSE_MOTION:
+            if (e.type == SDL_EVENT_MOUSE_MOTION)
                 forwardToImGui = false;
-                break;
-            default:
-                break;
-            }
         }
 
         if (forwardToImGui) {
-            ImGui_ImplSDL3_ProcessEvent(&event);
+            ImGui_ImplSDL3_ProcessEvent(&e);
         }
 
-        // Feed every event into the input manager
-        InputManager::Instance().ProcessSDLEvent(event);
+        InputManager::Instance().ProcessSDLEvent(e);
 
-        if (event.type == SDL_EVENT_QUIT) {
-            m_closeRequested = true;
+        switch (e.type) {
+        case SDL_EVENT_MOUSE_MOTION:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        case SDL_EVENT_MOUSE_WHEEL:
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP:
+        case SDL_EVENT_TEXT_INPUT:
+        case SDL_EVENT_DROP_FILE:
+        case SDL_EVENT_DROP_TEXT:
+            hadInputEvent = true;
+            break;
+        default:
             break;
         }
 
-        // Track window minimized / restored / occluded so the renderer
-        // can skip Vulkan draw calls when the window is not visible.
-        if (event.type == SDL_EVENT_WINDOW_MINIMIZED) {
+        if (e.type == SDL_EVENT_QUIT) {
+            m_closeRequested = true;
+        }
+
+        if (e.type == SDL_EVENT_WINDOW_MINIMIZED) {
             m_isMinimized = true;
         }
-        if (event.type == SDL_EVENT_WINDOW_RESTORED || event.type == SDL_EVENT_WINDOW_EXPOSED ||
-            event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        if (e.type == SDL_EVENT_WINDOW_RESTORED || e.type == SDL_EVENT_WINDOW_EXPOSED ||
+            e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
             m_isMinimized = false;
+            if (e.type != SDL_EVENT_WINDOW_EXPOSED) {
+                hadInputEvent = true;
+            }
         }
-        if (event.type == SDL_EVENT_WINDOW_OCCLUDED) {
+        if (e.type == SDL_EVENT_WINDOW_OCCLUDED) {
             m_isMinimized = true;
         }
+    };
+
+    // Process the event captured by SDL_WaitEventTimeout (if any)
+    if (gotFirstEvent) {
+        switch (firstEvent.type) {
+        case SDL_EVENT_MOUSE_MOTION:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        case SDL_EVENT_MOUSE_WHEEL:
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP:
+        case SDL_EVENT_TEXT_INPUT:
+        case SDL_EVENT_DROP_FILE:
+        case SDL_EVENT_DROP_TEXT:
+            pacing.wokeByInputEvent = true;
+            break;
+        case SDL_EVENT_WINDOW_MINIMIZED:
+        case SDL_EVENT_WINDOW_RESTORED:
+        case SDL_EVENT_WINDOW_EXPOSED:
+        case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        case SDL_EVENT_WINDOW_OCCLUDED:
+            pacing.wokeByWindowEvent = true;
+            break;
+        default:
+            pacing.wokeByOtherEvent = true;
+            break;
+        }
+        processOneEvent(firstEvent);
     }
+
+    // Drain remaining queued events
+    SDL_Event event{};
+    while (SDL_PollEvent(&event)) {
+        processOneEvent(event);
+        if (m_closeRequested)
+            break;
+    }
+
+    // Reset idle cooldown when user interacted
+    if (hadInputEvent) {
+        m_activeFramesRemaining = ACTIVE_COOLDOWN_FRAMES;
+    } else if (m_activeFramesRemaining > 0) {
+        --m_activeFramesRemaining;
+    }
+
+    pacing.hadInputEvent = hadInputEvent;
+    pacing.cooldownRemaining = m_activeFramesRemaining;
+    m_lastPacingSample = pacing;
+
     SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
 }
 

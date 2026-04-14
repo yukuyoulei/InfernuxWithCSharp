@@ -14,6 +14,7 @@ from typing import Callable, Optional
 
 from hub_utils import get_bundle_dir, get_hub_data_dir, is_frozen
 from runtime_requirements import runtime_modules, runtime_packages
+import logging
 
 
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -24,6 +25,8 @@ _REQUIRED_RUNTIME_MODULES = runtime_modules()
 
 
 def _runtime_lib_names() -> list[str]:
+    if sys.platform == "darwin":
+        return ["libpython3.12.dylib", "libpython3.dylib"]
     return ["python312.lib", "python3.lib"]
 
 
@@ -52,6 +55,12 @@ def _emit_status(callback: Optional[Callable[[str], None]], message: str) -> Non
 
 def _runtime_installer_info_for_machine() -> tuple[str, str]:
     machine = (platform.machine() or os.environ.get("PROCESSOR_ARCHITECTURE") or "").lower()
+    if sys.platform == "darwin":
+        # macOS universal2 installer from python.org
+        return (
+            "python-3.12.8-macos11.pkg",
+            "https://www.python.org/ftp/python/3.12.8/python-3.12.8-macos11.pkg",
+        )
     if machine in {"amd64", "x86_64"}:
         return (
             "python-3.12.8-amd64.exe",
@@ -186,7 +195,8 @@ def _embedded_runtime_has_site_enabled(root: str) -> bool:
         try:
             with open(pth_path, "r", encoding="utf-8") as f:
                 lines = {line.strip() for line in f if line.strip() and not line.strip().startswith("#")}
-        except OSError:
+        except OSError as _exc:
+            logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
             return False
         if not required_lines.issubset(lines):
             return False
@@ -206,14 +216,20 @@ def _is_python312(python_exe: str) -> bool:
 
 
 def _site_packages_root(runtime_root: str) -> str:
-    path = os.path.join(runtime_root, "Lib", "site-packages")
+    if sys.platform == "darwin":
+        path = os.path.join(runtime_root, "lib", "python3.12", "site-packages")
+    else:
+        path = os.path.join(runtime_root, "Lib", "site-packages")
     os.makedirs(path, exist_ok=True)
     return path
 
 
 def _has_build_support(root: str) -> bool:
     include_dir = os.path.join(root, "include")
-    libs_dir = os.path.join(root, "libs")
+    if sys.platform == "darwin":
+        libs_dir = os.path.join(root, "lib")
+    else:
+        libs_dir = os.path.join(root, "libs")
     if not os.path.isfile(os.path.join(include_dir, "Python.h")):
         return False
     return any(os.path.isfile(os.path.join(libs_dir, name)) for name in _runtime_lib_names())
@@ -357,20 +373,22 @@ class PythonRuntimeManager:
             python_exe = self._provision_managed_runtime(on_status=on_status)
         else:
             runtime_root = os.path.dirname(python_exe)
+            has_build_support = _has_build_support(runtime_root)
+            has_required_modules = self._has_modules(python_exe, *_REQUIRED_RUNTIME_MODULES)
             if is_frozen() and not allow_frozen_repair:
-                if not _has_build_support(runtime_root):
+                if not has_build_support:
                     raise PythonRuntimeError(
                         "The installed managed Python 3.12 runtime is missing CPython build support files.\n"
                         "Please reinstall Infernux Hub so the runtime can be prepared during installation."
                     )
-                if not self._has_modules(python_exe, *_REQUIRED_RUNTIME_MODULES):
+                if not has_required_modules:
                     raise PythonRuntimeError(
                         "The installed managed Python 3.12 runtime is missing required engine/build packages.\n"
                         "Please reinstall Infernux Hub so the runtime can be prepared during installation."
                     )
                 return python_exe
 
-            if allow_frozen_repair:
+            if allow_frozen_repair and is_frozen() and (not has_build_support or not has_required_modules):
                 repaired_python = self._seed_runtime_from_bundle(overwrite=True, on_status=on_status)
                 if not repaired_python:
                     repaired_python = self._install_runtime_to_root(
@@ -391,7 +409,7 @@ class PythonRuntimeManager:
         Each project owns its own complete Python copy so there is no need
         for virtual-environment indirection.
         """
-        self.ensure_runtime()
+        self.ensure_runtime(allow_frozen_repair=is_frozen())
         source = self.private_runtime_root()
         if not os.path.isdir(source):
             raise PythonRuntimeError(
@@ -514,11 +532,14 @@ class PythonRuntimeManager:
         overwrite: bool = False,
         on_status: Optional[Callable[[str], None]] = None,
     ) -> str:
-        if sys.platform != "win32":
-            raise PythonRuntimeError("Infernux Hub currently supports managed Python installation on Windows only.")
-
         if overwrite:
             shutil.rmtree(runtime_root, ignore_errors=True)
+
+        if sys.platform == "darwin":
+            return self._install_runtime_to_root_macos(runtime_root, on_status=on_status)
+
+        if sys.platform != "win32":
+            raise PythonRuntimeError("Infernux Hub currently supports managed Python installation on Windows and macOS only.")
 
         installer_path = self._ensure_runtime_installer(on_status=on_status)
         os.makedirs(os.path.dirname(runtime_root), exist_ok=True)
@@ -554,6 +575,51 @@ class PythonRuntimeManager:
                 "Python 3.12 installation completed, but a valid full python.exe was not found afterwards."
             )
         return python_exe
+
+    def _install_runtime_to_root_macos(
+        self,
+        runtime_root: str,
+        *,
+        on_status: Optional[Callable[[str], None]] = None,
+    ) -> str:
+        """Install Python 3.12 on macOS using the python.org .pkg installer."""
+        installer_path = self._ensure_runtime_installer(on_status=on_status)
+        os.makedirs(runtime_root, exist_ok=True)
+        _emit_status(on_status, "Installing managed Python 3.12 runtime (macOS)...")
+
+        # Install the .pkg to a custom location via installer(8)
+        completed = _run_command(
+            ["installer", "-pkg", installer_path, "-target", "CurrentUserHomeDirectory"],
+            timeout=3600,
+            raise_on_error=False,
+        )
+        if completed.returncode != 0:
+            raise PythonRuntimeError(
+                "Failed to install the managed Python 3.12 runtime on macOS.\n"
+                f"{(completed.stderr or completed.stdout or '').strip()}"
+            )
+
+        # The python.org .pkg installs into /Library/Frameworks/Python.framework
+        # or ~/Library/Frameworks/Python.framework for CurrentUserHomeDirectory.
+        # Locate the installed python3.12 binary.
+        framework_candidates = [
+            os.path.expanduser("~/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"),
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
+            "/usr/local/bin/python3.12",
+        ]
+        for candidate in framework_candidates:
+            if os.path.isfile(candidate) and _is_python312(candidate):
+                # Symlink the framework python into our runtime root
+                dest_bin = os.path.join(runtime_root, "bin")
+                os.makedirs(dest_bin, exist_ok=True)
+                link_path = os.path.join(dest_bin, "python")
+                if not os.path.exists(link_path):
+                    os.symlink(candidate, link_path)
+                return candidate
+
+        raise PythonRuntimeError(
+            "Python 3.12 .pkg installation completed, but python3.12 was not found afterwards."
+        )
 
     def _get_pip_script_path(self, *, on_status: Optional[Callable[[str], None]] = None) -> str:
         target_path = os.path.join(self.installed_runtime_dir(), "get-pip.py")

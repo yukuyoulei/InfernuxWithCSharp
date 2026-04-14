@@ -4,6 +4,16 @@ import os
 import sys
 from functools import wraps
 
+
+def _log_suppressed(exc: BaseException) -> None:
+    """Best-effort log for early-init code (Debug may not be available yet)."""
+    try:
+        from Infernux.debug import Debug
+        Debug.log(f"[Suppressed] {type(exc).__name__}: {exc}")
+    except Exception:
+        pass
+
+
 lib_dir = os.path.join(os.path.dirname(__file__))
 lib_dir = os.path.abspath(lib_dir)
 
@@ -24,6 +34,11 @@ def _register_native_search_dir(path: str) -> None:
         path_entries = os.environ.get("PATH", "").split(";") if os.environ.get("PATH") else []
         if norm not in path_entries:
             os.environ["PATH"] = norm + (";" + os.environ["PATH"] if os.environ.get("PATH") else "")
+    elif sys.platform == "darwin":
+        dyld_path = os.environ.get("DYLD_LIBRARY_PATH", "")
+        parts = dyld_path.split(":") if dyld_path else []
+        if norm not in parts:
+            os.environ["DYLD_LIBRARY_PATH"] = norm + ((":" + dyld_path) if dyld_path else "")
     else:
         ld_path = os.environ.get("LD_LIBRARY_PATH", "")
         parts = ld_path.split(":") if ld_path else []
@@ -50,28 +65,60 @@ def _iter_dev_native_search_dirs():
             yield os.path.join(build_root, *prefix, config)
 
 
+_SYSTEM_DLL_CHECKS = (
+    ("MSVCP140.dll", "Install or repair the Microsoft Visual C++ Redistributable."),
+    ("VCRUNTIME140.dll", "Install or repair the Microsoft Visual C++ Redistributable."),
+    ("VCRUNTIME140_1.dll", "Install or repair the Microsoft Visual C++ Redistributable."),
+    ("vulkan-1.dll", "Install a current GPU driver or the Vulkan Runtime."),
+)
+
+_ENGINE_DLLS = (
+    "SDL3.dll",
+    "assimp-vc143-mt.dll",
+    "glslang.dll",
+    "SPIRV.dll",
+    "Jolt.dll",
+)
+
+
 def _collect_windows_native_load_hints():
     if sys.platform != "win32":
         return []
 
     hints = []
-    checks = (
-        ("MSVCP140.dll", "Install or repair the Microsoft Visual C++ Redistributable."),
-        ("VCRUNTIME140.dll", "Install or repair the Microsoft Visual C++ Redistributable."),
-        ("VCRUNTIME140_1.dll", "Install or repair the Microsoft Visual C++ Redistributable."),
-        ("vulkan-1.dll", "Install a current GPU driver or the Vulkan Runtime."),
-    )
 
-    for dll_name, remedy in checks:
+    for dll_name, remedy in _SYSTEM_DLL_CHECKS:
         try:
             ctypes.WinDLL(dll_name)
         except OSError:
-            hints.append(f"Missing {dll_name}. {remedy}")
+            hints.append(f"Missing system DLL: {dll_name}. {remedy}")
 
     if not glob.glob(os.path.join(lib_dir, "_Infernux*.pyd")):
         hints.append(f"Missing _Infernux*.pyd under {lib_dir}. Reinstall the Infernux wheel.")
 
+    for dll_name in _ENGINE_DLLS:
+        full = os.path.join(lib_dir, dll_name)
+        if not os.path.isfile(full):
+            hints.append(f"Missing engine DLL: {dll_name}. Reinstall the Infernux wheel.")
+        else:
+            try:
+                ctypes.WinDLL(full)
+            except OSError as e:
+                hints.append(
+                    f"Engine DLL present but failed to load: {dll_name} ({e}). "
+                    f"A dependency of this DLL may be missing."
+                )
+
     return hints
+
+
+def _list_lib_dir_contents():
+    try:
+        entries = sorted(os.listdir(lib_dir))
+        dlls = [e for e in entries if e.lower().endswith((".dll", ".pyd", ".so", ".dylib"))]
+        return dlls
+    except OSError:
+        return []
 
 
 def _raise_native_import_error(exc):
@@ -83,16 +130,69 @@ def _raise_native_import_error(exc):
 
     hints = _collect_windows_native_load_hints()
     if hints:
-        lines.append("Likely causes:")
-        lines.extend(f"- {hint}" for hint in hints)
+        lines.append("Diagnostic results:")
+        lines.extend(f"  - {hint}" for hint in hints)
+    elif sys.platform == "darwin":
+        if not glob.glob(os.path.join(lib_dir, "_Infernux*.so")):
+            lines.append(f"Missing _Infernux*.so under {lib_dir}. Build the native module first.")
+        lines.append(
+            "Likely causes: missing Vulkan SDK (MoltenVK), or the native module was not built for this architecture."
+        )
     elif sys.platform == "win32":
         lines.append(
             "Likely causes: a missing Vulkan runtime or missing Microsoft Visual C++ runtime DLLs."
         )
 
+    found = _list_lib_dir_contents()
+    if found:
+        lines.append(f"Native files found in lib directory ({len(found)}):")
+        lines.extend(f"  {f}" for f in found)
+    else:
+        lines.append("WARNING: No native files found in lib directory!")
+
     raise ImportError("\n".join(lines)) from exc
 
+
+def _preload_bundled_crt_dlls() -> None:
+    """Pre-load MSVC CRT DLLs bundled alongside ``_Infernux.pyd``.
+
+    On machines without a system-wide Visual C++ Redistributable install,
+    ``os.add_dll_directory()`` alone is not always sufficient —
+    ``_Infernux.pyd`` (and the engine DLLs it depends on) may still fail
+    to resolve ``vcruntime140.dll`` / ``msvcp140.dll`` at load time.
+
+    Explicitly loading them via ``ctypes.WinDLL`` before the ``from
+    ._Infernux import *`` guarantees they are resident in the process
+    and the dynamic linker can satisfy the dependency.
+    """
+    if sys.platform != "win32":
+        return
+
+    # Order matters: vcruntime first, then msvcp / concrt (they depend
+    # on vcruntime).
+    _CRT_LOAD_ORDER = (
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "msvcp140_atomic_wait.dll",
+        "msvcp140_codecvt_ids.dll",
+        "concrt140.dll",
+    )
+
+    for name in _CRT_LOAD_ORDER:
+        full = os.path.join(lib_dir, name)
+        if os.path.isfile(full):
+            try:
+                ctypes.WinDLL(full)
+            except OSError as _exc:
+                _log_suppressed(_exc)
+                pass  # Best-effort; the import below will give a clear error.
+
+
 _register_native_search_dir(lib_dir)
+_preload_bundled_crt_dlls()
 
 try:
     from ._Infernux import *
@@ -103,6 +203,26 @@ except (ModuleNotFoundError, ImportError):
         from ._Infernux import *
     except (ModuleNotFoundError, ImportError) as exc:
         _raise_native_import_error(exc)
+
+# `import *` skips underscore-prefixed names.  Re-export internal C++
+# helpers so that `from Infernux import lib; lib._cds_register_class`
+# works for the Python-side CDS bridge and batch API.
+try:
+    from ._Infernux import (
+        _cds_register_class,
+        _cds_register_field,
+        _cds_alloc,
+        _cds_free,
+        _cds_get,
+        _cds_set,
+        _cds_batch_gather,
+        _cds_batch_scatter,
+        _cds_clear,
+        _transform_batch_read,
+        _transform_batch_write,
+    )
+except ImportError:
+    pass  # graceful fallback if built without batch support
 
 
 _INVALID_NATIVE_LIFETIME_MARKERS = (
@@ -291,7 +411,8 @@ def _resolve_game_object_instantiate_source(original):
             return "prefab", original
         if isinstance(original, GameObjectRef):
             return "game_object", original.resolve()
-    except Exception:
+    except Exception as _exc:
+        _log_suppressed(_exc)
         pass
 
     resolver = getattr(original, "resolve", None)
@@ -316,7 +437,8 @@ def _coerce_parent_game_object(parent):
         from Infernux.components.ref_wrappers import GameObjectRef
         if isinstance(parent, GameObjectRef):
             return parent.resolve()
-    except Exception:
+    except Exception as _exc:
+        _log_suppressed(_exc)
         pass
 
     game_object = getattr(parent, "game_object", None)
@@ -357,7 +479,8 @@ def _capture_local_transform(game_object):
     try:
         transform = game_object.transform
         return transform.local_position, transform.local_rotation, transform.local_scale
-    except Exception:
+    except Exception as _exc:
+        _log_suppressed(_exc)
         return None
 
 
@@ -370,7 +493,8 @@ def _restore_local_transform(game_object, local_transform):
         transform.local_position = local_position
         transform.local_rotation = local_rotation
         transform.local_scale = local_scale
-    except Exception:
+    except Exception as _exc:
+        _log_suppressed(_exc)
         return
 
 

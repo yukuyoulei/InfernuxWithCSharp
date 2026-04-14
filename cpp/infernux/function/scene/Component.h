@@ -14,6 +14,7 @@ class GameObject;
 class Transform;
 class Collider;
 struct CollisionInfo;
+void InvalidateGameObjectLifecycleCaches(GameObject *gameObject);
 
 /**
  * @brief Base class for all components that can be attached to GameObjects.
@@ -208,21 +209,22 @@ class Component
     /// @brief Set component ID (used during deserialization to restore ID)
     void SetComponentID(uint64_t id);
 
-    /// @brief Get the runtime instance GUID (unique per component instance, for dependency graph).
-    [[nodiscard]] const std::string &GetInstanceGuid() const
+    /// @brief Get a string key suitable for AssetDependencyGraph registration.
+    /// Only called by MeshRenderer when asset edges change — NOT on the hot creation path.
+    [[nodiscard]] std::string GetInstanceGuid() const
     {
-        return m_instanceGuid;
+        return std::to_string(m_componentId);
     }
 
-    /// @brief Set instance GUID (used during deserialization to restore stable identity).
-    void SetInstanceGuid(const std::string &guid);
-
     // ========================================================================
-    // Static instance registry (instance GUID → Component*)
+    // Static instance registry (component ID → Component*)
     // ========================================================================
 
-    /// @brief Look up a live Component by its instance GUID. Returns nullptr if not found.
-    static Component *FindByInstanceGuid(const std::string &guid);
+    /// @brief Look up a live Component by component ID. Returns nullptr if not found.
+    static Component *FindByComponentId(uint64_t id);
+
+    /// @brief Pre-allocate the component registry hash map for bulk creation.
+    static void ReserveRegistry(size_t n);
 
     /// @brief Check if the component is enabled
     [[nodiscard]] bool IsEnabled() const
@@ -262,7 +264,13 @@ class Component
     /// @brief Set per-component execution order (Unity-style script order baseline).
     void SetExecutionOrder(int order)
     {
+        if (m_executionOrder == order) {
+            return;
+        }
         m_executionOrder = order;
+        if (m_gameObject) {
+            InvalidateGameObjectLifecycleCaches(m_gameObject);
+        }
     }
 
     /// @brief Get component type name for serialization/debugging
@@ -363,15 +371,13 @@ class Component
     bool m_isBeingDestroyed = false;
     int m_executionOrder = 0;
     uint64_t m_componentId = 0;
-    std::string m_instanceGuid; ///< Runtime instance GUID for dependency graph and prefab identity
 
   private:
     static uint64_t GenerateComponentID();
     static void EnsureNextComponentID(uint64_t id);
-    static std::string GenerateInstanceGuid();
 
-    /// Static registry: instance GUID → Component*. Updated in ctor/dtor.
-    static std::unordered_map<std::string, Component *> &GetInstanceRegistry();
+    /// Static registry: component ID → Component*. Updated in ctor/dtor.
+    static std::unordered_map<uint64_t, Component *> &GetInstanceRegistry();
 
     friend class Scene; // Scene needs to call Start
 };

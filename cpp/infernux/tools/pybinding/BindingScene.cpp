@@ -27,6 +27,7 @@
 #include "function/scene/SceneManager.h"
 #include "function/scene/SphereCollider.h"
 #include "function/scene/Transform.h"
+#include "function/scene/physics/PhysicsECSStore.h"
 #include <functional>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -120,53 +121,115 @@ enum class PrimitiveType
 };
 
 /**
+ * @brief Resolve static primitive mesh data (zero-copy reference).
+ */
+static void GetPrimitiveMeshData(PrimitiveType type, const std::vector<Vertex> *&outVertices,
+                                 const std::vector<uint32_t> *&outIndices, const char *&outDefaultName)
+{
+    switch (type) {
+    case PrimitiveType::Cube:
+        outVertices = &PrimitiveMeshes::GetCubeVertices();
+        outIndices = &PrimitiveMeshes::GetCubeIndices();
+        outDefaultName = "Cube";
+        break;
+    case PrimitiveType::Sphere:
+        outVertices = &PrimitiveMeshes::GetSphereVertices();
+        outIndices = &PrimitiveMeshes::GetSphereIndices();
+        outDefaultName = "Sphere";
+        break;
+    case PrimitiveType::Capsule:
+        outVertices = &PrimitiveMeshes::GetCapsuleVertices();
+        outIndices = &PrimitiveMeshes::GetCapsuleIndices();
+        outDefaultName = "Capsule";
+        break;
+    case PrimitiveType::Cylinder:
+        outVertices = &PrimitiveMeshes::GetCylinderVertices();
+        outIndices = &PrimitiveMeshes::GetCylinderIndices();
+        outDefaultName = "Cylinder";
+        break;
+    case PrimitiveType::Plane:
+        outVertices = &PrimitiveMeshes::GetPlaneVertices();
+        outIndices = &PrimitiveMeshes::GetPlaneIndices();
+        outDefaultName = "Plane";
+        break;
+    }
+}
+
+/**
  * @brief Helper function to create a primitive GameObject.
+ * Auto-reserves capacity when rapid creation is detected.
  */
 static GameObject *CreatePrimitiveObject(Scene *scene, PrimitiveType type, const std::string &name = "")
 {
-    std::string objectName;
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
+    const std::vector<Vertex> *vertices = nullptr;
+    const std::vector<uint32_t> *indices = nullptr;
+    const char *defaultName = "Primitive";
+    GetPrimitiveMeshData(type, vertices, indices, defaultName);
 
-    switch (type) {
-    case PrimitiveType::Cube:
-        objectName = name.empty() ? "Cube" : name;
-        vertices =
-            std::vector<Vertex>(PrimitiveMeshes::GetCubeVertices().begin(), PrimitiveMeshes::GetCubeVertices().end());
-        indices =
-            std::vector<uint32_t>(PrimitiveMeshes::GetCubeIndices().begin(), PrimitiveMeshes::GetCubeIndices().end());
-        break;
-    case PrimitiveType::Sphere:
-        objectName = name.empty() ? "Sphere" : name;
-        vertices = PrimitiveMeshes::GetSphereVertices();
-        indices = PrimitiveMeshes::GetSphereIndices();
-        break;
-    case PrimitiveType::Capsule:
-        objectName = name.empty() ? "Capsule" : name;
-        vertices = PrimitiveMeshes::GetCapsuleVertices();
-        indices = PrimitiveMeshes::GetCapsuleIndices();
-        break;
-    case PrimitiveType::Cylinder:
-        objectName = name.empty() ? "Cylinder" : name;
-        vertices = PrimitiveMeshes::GetCylinderVertices();
-        indices = PrimitiveMeshes::GetCylinderIndices();
-        break;
-    case PrimitiveType::Plane:
-        objectName = name.empty() ? "Plane" : name;
-        vertices = PrimitiveMeshes::GetPlaneVertices();
-        indices = PrimitiveMeshes::GetPlaneIndices();
-        break;
+    const std::string objectName = name.empty() ? defaultName : name;
+
+    // Auto-reserve: when the ECS store is near capacity, pre-allocate a
+    // large chunk so subsequent creates don't trigger per-call reallocation.
+    auto &ecs = TransformECSStore::Instance();
+    const size_t cap = ecs.Capacity();
+    const size_t alive = ecs.AliveCount();
+    if (alive + 1 >= cap) {
+        // Growing: reserve 2× current or at least 1024 extra slots.
+        const size_t newCap = std::max(cap * 2, cap + 1024);
+        ecs.Reserve(newCap);
+        scene->ReserveCapacity(newCap);
+        // Reserve component registry (~3 components per GO)
+        Component::ReserveRegistry(newCap * 3);
+        // Reserve renderer containers (1 MeshRenderer per primitive)
+        SceneManager::Instance().ReserveRendererCapacity(newCap);
+        // Reserve physics pools (1 collider per GO when physics is used)
+        PhysicsECSStore::Instance().ReserveForBulkCreation(newCap);
     }
 
     GameObject *obj = scene->CreateGameObject(objectName);
     if (obj) {
         MeshRenderer *renderer = obj->AddComponent<MeshRenderer>();
         if (renderer) {
-            renderer->SetMesh(std::move(vertices), std::move(indices));
-            renderer->SetInlineMeshName(objectName);
+            renderer->SetSharedPrimitiveMesh(*vertices, *indices, objectName);
         }
     }
     return obj;
+}
+
+/**
+ * @brief Batch-create N primitive GameObjects with pre-reserved capacity.
+ * Returns a Python list of GameObjects.
+ */
+static py::list CreatePrimitiveObjectsBatch(Scene *scene, PrimitiveType type, size_t count,
+                                            const std::string &namePrefix = "")
+{
+    const std::vector<Vertex> *vertices = nullptr;
+    const std::vector<uint32_t> *indices = nullptr;
+    const char *defaultName = "Primitive";
+    GetPrimitiveMeshData(type, vertices, indices, defaultName);
+
+    const std::string prefix = namePrefix.empty() ? defaultName : namePrefix;
+
+    // Pre-allocate capacity to avoid incremental vector growth.
+    scene->ReserveCapacity(count);
+    TransformECSStore::Instance().Reserve(TransformECSStore::Instance().Capacity() + count);
+    Component::ReserveRegistry(count * 3);
+    SceneManager::Instance().ReserveRendererCapacity(count);
+    PhysicsECSStore::Instance().ReserveForBulkCreation(count);
+
+    py::list result(count);
+    for (size_t i = 0; i < count; ++i) {
+        std::string objName = prefix + "_" + std::to_string(i);
+        GameObject *obj = scene->CreateGameObject(objName);
+        if (obj) {
+            MeshRenderer *renderer = obj->AddComponent<MeshRenderer>();
+            if (renderer) {
+                renderer->SetSharedPrimitiveMesh(*vertices, *indices, prefix);
+            }
+        }
+        result[i] = py::cast(obj, py::return_value_policy::reference);
+    }
+    return result;
 }
 
 /**
@@ -500,7 +563,7 @@ void RegisterSceneBindings(py::module_ &m)
         .def("serialize", &MeshRenderer::Serialize, "Serialize MeshRenderer to JSON string")
 
         // ====================================================================
-        // Phase 1: Mesh data access (for AI/CV and Python-side mesh inspection)
+        // Mesh data access for scripting and inspection tools
         // ====================================================================
         .def_property_readonly(
             "vertex_count",
@@ -677,7 +740,7 @@ void RegisterSceneBindings(py::module_ &m)
         .def_property("shadow_strength", &Light::GetShadowStrength, &Light::SetShadowStrength, "Shadow strength (0-1)")
         .def_property("shadow_bias", &Light::GetShadowBias, &Light::SetShadowBias, "Shadow depth bias")
 
-        // Shadow mapping matrices (Phase 4.4.3)
+        // Shadow mapping matrices
         .def("get_light_view_matrix", &Light::GetLightViewMatrix, "Get the light's view matrix for shadow mapping")
         .def("get_light_projection_matrix", &Light::GetLightProjectionMatrix, py::arg("shadow_extent") = 20.0f,
              py::arg("near_plane") = 0.1f, py::arg("far_plane") = 100.0f,
@@ -703,7 +766,7 @@ void RegisterSceneBindings(py::module_ &m)
         .export_values();
 
     // ========================================================================
-    // CameraClearFlags enum (Phase 1)
+    // CameraClearFlags enum
     // ========================================================================
     py::enum_<CameraClearFlags>(m, "CameraClearFlags")
         .value("Skybox", CameraClearFlags::Skybox)
@@ -734,17 +797,17 @@ void RegisterSceneBindings(py::module_ &m)
                       "Rendering depth (lower depth renders first, like Unity Camera.depth)")
         .def_property("culling_mask", &Camera::GetCullingMask, &Camera::SetCullingMask,
                       "Layer culling bitmask (which layers this camera renders)")
-        // Phase 1: Clear flags & background color
+        // Clear flags & background color
         .def_property("clear_flags", &Camera::GetClearFlags, &Camera::SetClearFlags,
                       "Camera clear flags (Skybox, SolidColor, DepthOnly, DontClear)")
         .def_property(
             "background_color", [](const Camera &c) -> glm::vec4 { return c.GetBackgroundColor(); },
             [](Camera &c, const glm::vec4 &v) { c.SetBackgroundColor(v); },
             "Background color as vec4f (r, g, b, a) — used when clear_flags == SolidColor")
-        // Phase 0: Screen dimensions (read-only, set by renderer)
+        // Screen dimensions (read-only, set by renderer)
         .def_property_readonly("pixel_width", &Camera::GetPixelWidth, "Render target width in pixels")
         .def_property_readonly("pixel_height", &Camera::GetPixelHeight, "Render target height in pixels")
-        // Phase 0: Coordinate conversion
+        // Coordinate conversion
         .def(
             "screen_to_world_point",
             [](const Camera &c, float x, float y, float depth) { return c.ScreenToWorldPoint(glm::vec2(x, y), depth); },
@@ -825,6 +888,8 @@ void RegisterSceneBindings(py::module_ &m)
         .def_property("layer", &GameObject::GetLayer, &GameObject::SetLayer, "Layer index (0-31) for this GameObject")
         .def_property("is_static", &GameObject::IsStatic, &GameObject::SetStatic,
                       "Static flag for this GameObject (Unity: gameObject.isStatic)")
+        .def_property_readonly("is_persistent", &GameObject::IsPersistent,
+                               "True if this object is marked DontDestroyOnLoad")
         .def_property("prefab_guid", &GameObject::GetPrefabGuid, &GameObject::SetPrefabGuid,
                       "GUID of the source .prefab asset (empty = not a prefab instance)")
         .def_property("prefab_root", &GameObject::IsPrefabRoot, &GameObject::SetPrefabRoot,
@@ -849,13 +914,26 @@ void RegisterSceneBindings(py::module_ &m)
                 if (typeName.empty()) {
                     return py::none();
                 }
+                // Try native C++ component first.
                 Component *comp = obj->AddComponentByTypeName(typeName);
-                if (!comp) {
-                    return py::none();
+                if (comp) {
+                    return ComponentBindingRegistry::Instance().CastToPython(comp);
                 }
-                return ComponentBindingRegistry::Instance().CastToPython(comp);
+                // If native creation failed and the argument is a class (not a
+                // string), treat it as a Python InxComponent subclass:
+                // instantiate and delegate to add_py_component.
+                if (!py::isinstance<py::str>(componentType) && py::isinstance<py::type>(componentType)) {
+                    try {
+                        py::object instance = componentType();
+                        return py::cast(obj, py::return_value_policy::reference).attr("add_py_component")(instance);
+                    } catch (py::error_already_set &e) {
+                        INXLOG_WARN("[Binding] Failed to instantiate Python component '{}': {}", typeName, e.what());
+                        return py::none();
+                    }
+                }
+                return py::none();
             },
-            py::arg("component_type"), "Add a C++ component by type or type name")
+            py::arg("component_type"), "Add a component by type, type name, or InxComponent subclass")
         .def(
             "remove_component", [](GameObject *obj, Component *component) { return obj->RemoveComponent(component); },
             py::arg("component"), "Remove a component instance (cannot remove Transform or required components)")
@@ -1364,6 +1442,13 @@ void RegisterSceneBindings(py::module_ &m)
             },
             py::return_value_policy::reference, py::arg("type"), py::arg("name") = "",
             "Create a primitive GameObject (Cube, Sphere, Capsule, Cylinder, Plane)")
+        .def(
+            "create_primitives_batch",
+            [](Scene *scene, PrimitiveType type, size_t count, const std::string &namePrefix) {
+                return CreatePrimitiveObjectsBatch(scene, type, count, namePrefix);
+            },
+            py::arg("type"), py::arg("count"), py::arg("name_prefix") = "",
+            "Batch-create N primitive GameObjects. Returns a list of GameObjects.")
         .def(
             "create_from_model",
             [](Scene *scene, const std::string &guid, const std::string &name) {

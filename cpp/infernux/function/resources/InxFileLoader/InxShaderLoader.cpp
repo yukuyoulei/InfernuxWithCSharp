@@ -24,6 +24,20 @@ std::unordered_map<std::string, std::vector<char>> InxShaderLoader::s_gbufferVar
 std::string InxShaderLoader::s_lastCompileError;
 std::unordered_map<std::string, std::unordered_map<std::string, std::string>> InxShaderLoader::s_shaderIdMapCache;
 
+void InxShaderLoader::InvalidateDirectoryCache(const std::string &dir)
+{
+    if (dir.empty()) {
+        s_shaderIdMapCache.clear();
+        s_shadingModelCache.clear();
+    } else {
+        const std::string normalized = FromFsPath(ToFsPath(dir));
+        s_shaderIdMapCache.erase(normalized);
+        // Shading models may have been loaded from this directory — clear all
+        // since we cannot cheaply map model-name → source-dir.
+        s_shadingModelCache.clear();
+    }
+}
+
 void InxShaderLoader::AddShaderSearchPath(const std::string &dir)
 {
     const std::string normalizedDir = FromFsPath(ToFsPath(dir));
@@ -104,8 +118,8 @@ void InxShaderLoader::CreateMeta(const char *content, size_t contentSize, const 
     auto desc = ParseShaderSource(std::string(content, contentSize), filePath);
 
     // ----------------------------------------------------------------
-    // Phase 4: Apply Surface Options defaults
-    // @surface_type determines default render state when user hasn't
+    // Apply Surface Options defaults.
+    // @surface_type determines default render state when the user has not
     // explicitly overridden individual settings.
     // ----------------------------------------------------------------
     if (desc.surfaceOptions.surfaceType == "transparent") {

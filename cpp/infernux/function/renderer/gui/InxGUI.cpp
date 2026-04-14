@@ -1,5 +1,6 @@
 #include "InxGUI.h"
 #include "InxGUIContext.h"
+#include <function/editor/EditorTheme.h>
 #include <function/renderer/vk/VkRenderUtils.h>
 
 #include <SDL3/SDL.h>
@@ -62,6 +63,11 @@ void InxGUI::Init(SDL_Window *window)
         // No conversion needed: UNORM swapchain writes values as-is.
         auto L = [](float r, float g, float b, float a) -> ImVec4 { return ImVec4(r, g, b, a); };
 
+        // Accent color shorthand (Infernux red #EB5757)
+        constexpr float AR = EditorTheme::ACCENT_R;
+        constexpr float AG = EditorTheme::ACCENT_G;
+        constexpr float AB = EditorTheme::ACCENT_B;
+
         // --- Text ---
         c[ImGuiCol_Text] = L(0.812f, 0.812f, 0.812f, 1.00f);           // #CFCFCF
         c[ImGuiCol_TextDisabled] = L(0.333f, 0.333f, 0.333f, 1.00f);   // #555555
@@ -90,10 +96,10 @@ void InxGUI::Init(SDL_Window *window)
         c[ImGuiCol_ScrollbarGrabActive] = L(0.439f, 0.439f, 0.439f, 1.00f);
 
         // --- Interactive accent ---
-        c[ImGuiCol_CheckMark] = L(0.922f, 0.341f, 0.341f, 1.00f);        // #EB5757
-        c[ImGuiCol_SliderGrab] = L(0.922f, 0.341f, 0.341f, 0.88f);       // #EB5757
-        c[ImGuiCol_SliderGrabActive] = L(0.922f, 0.341f, 0.341f, 1.00f); // #EB5757
-        c[ImGuiCol_NavHighlight] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);       // no outline on active fields
+        c[ImGuiCol_CheckMark] = L(AR, AG, AB, 1.00f);              // #EB5757
+        c[ImGuiCol_SliderGrab] = L(AR, AG, AB, 0.88f);             // #EB5757
+        c[ImGuiCol_SliderGrabActive] = L(AR, AG, AB, 1.00f);       // #EB5757
+        c[ImGuiCol_NavHighlight] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // no outline on active fields
 
         // --- Buttons --- subtle dark surface with red accent on interaction
         c[ImGuiCol_Button] = L(0.165f, 0.165f, 0.165f, 1.00f); // #2A2A2A
@@ -109,25 +115,25 @@ void InxGUI::Init(SDL_Window *window)
         c[ImGuiCol_Border] = L(0.184f, 0.184f, 0.184f, 1.00f);
         c[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
         c[ImGuiCol_Separator] = L(0.184f, 0.184f, 0.184f, 1.00f);
-        c[ImGuiCol_SeparatorHovered] = L(0.922f, 0.341f, 0.341f, 0.60f); // #EB5757
-        c[ImGuiCol_SeparatorActive] = L(0.922f, 0.341f, 0.341f, 0.80f);  // #EB5757
+        c[ImGuiCol_SeparatorHovered] = L(AR, AG, AB, 0.60f); // #EB5757
+        c[ImGuiCol_SeparatorActive] = L(AR, AG, AB, 0.80f);  // #EB5757
 
         // --- Resize grip ---
         c[ImGuiCol_ResizeGrip] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-        c[ImGuiCol_ResizeGripHovered] = L(0.922f, 0.341f, 0.341f, 0.30f);
-        c[ImGuiCol_ResizeGripActive] = L(0.922f, 0.341f, 0.341f, 0.50f);
+        c[ImGuiCol_ResizeGripHovered] = L(AR, AG, AB, 0.30f);
+        c[ImGuiCol_ResizeGripActive] = L(AR, AG, AB, 0.50f);
 
         // --- Tabs ---
-        c[ImGuiCol_Tab] = L(0.098f, 0.098f, 0.098f, 1.00f);                       // #191919
-        c[ImGuiCol_TabHovered] = L(0.165f, 0.165f, 0.165f, 1.00f);                // #2A2A2A
-        c[ImGuiCol_TabSelected] = L(0.125f, 0.125f, 0.125f, 1.00f);               // #202020
-        c[ImGuiCol_TabSelectedOverline] = L(0.922f, 0.341f, 0.341f, 1.00f);       // #EB5757 red overline
-        c[ImGuiCol_TabDimmed] = L(0.098f, 0.098f, 0.098f, 1.00f);                 // #191919
-        c[ImGuiCol_TabDimmedSelected] = L(0.125f, 0.125f, 0.125f, 1.00f);         // #202020
-        c[ImGuiCol_TabDimmedSelectedOverline] = L(0.922f, 0.341f, 0.341f, 0.60f); // dimmer red overline
+        c[ImGuiCol_Tab] = L(0.098f, 0.098f, 0.098f, 1.00f);               // #191919
+        c[ImGuiCol_TabHovered] = L(0.165f, 0.165f, 0.165f, 1.00f);        // #2A2A2A
+        c[ImGuiCol_TabSelected] = L(0.125f, 0.125f, 0.125f, 1.00f);       // #202020
+        c[ImGuiCol_TabSelectedOverline] = L(AR, AG, AB, 1.00f);           // #EB5757 red overline
+        c[ImGuiCol_TabDimmed] = L(0.098f, 0.098f, 0.098f, 1.00f);         // #191919
+        c[ImGuiCol_TabDimmedSelected] = L(0.125f, 0.125f, 0.125f, 1.00f); // #202020
+        c[ImGuiCol_TabDimmedSelectedOverline] = L(AR, AG, AB, 0.60f);     // dimmer red overline
 
         // --- Docking ---
-        c[ImGuiCol_DockingPreview] = L(0.922f, 0.341f, 0.341f, 0.25f); // #EB5757
+        c[ImGuiCol_DockingPreview] = L(AR, AG, AB, 0.25f); // #EB5757
         c[ImGuiCol_DockingEmptyBg] = L(0.060f, 0.060f, 0.060f, 1.00f);
 
         // --- Plots ---
@@ -335,97 +341,102 @@ void InxGUI::BuildFrame()
         io.MouseWheelH = 0.0f;
     }
 
-    // Create a full-screen DockSpace (reserve bottom strip for the Python status bar)
-    const float kStatusBarHeight = 24.0f * m_dpiScale; // must match _HEIGHT in status_bar.py
-    ImGuiViewport *viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - kStatusBarHeight));
-    ImGui::SetNextWindowViewport(viewport->ID);
+    // In player mode, skip DockSpace/DockBuilder entirely — they are only
+    // needed for the editor's multi-panel layout.  The player registers a
+    // single full-screen renderable (PlayerGUI), so docking is wasted work.
+    if (!m_playerMode) {
+        // Create a full-screen DockSpace (reserve bottom strip for the Python status bar)
+        const float kStatusBarHeight = 24.0f * m_dpiScale; // must match _HEIGHT in status_bar.py
+        ImGuiViewport *viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - kStatusBarHeight));
+        ImGui::SetNextWindowViewport(viewport->ID);
 
-    ImGuiWindowFlags dockSpaceFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-                                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
+        ImGuiWindowFlags dockSpaceFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+                                          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                          ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-    ImGui::Begin("DockSpaceWindow", nullptr, dockSpaceFlags);
-    ImGui::PopStyleVar(3);
+        ImGui::Begin("DockSpaceWindow", nullptr, dockSpaceFlags);
+        ImGui::PopStyleVar(3);
 
-    // Check whether a saved layout already exists BEFORE DockSpace()
-    // creates the node.  If the node doesn't exist yet (first launch or
-    // imgui.ini was deleted by the Python layout-version mechanism), we
-    // need to build the default Unity-style layout.
-    ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
-    bool needsDefaultLayout = (ImGui::DockBuilderGetNode(dockspaceId) == nullptr);
+        // Check whether a saved layout already exists BEFORE DockSpace()
+        // creates the node.  If the node doesn't exist yet (first launch or
+        // imgui.ini was deleted by the Python layout-version mechanism), we
+        // need to build the default Unity-style layout.
+        ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
+        bool needsDefaultLayout = (ImGui::DockBuilderGetNode(dockspaceId) == nullptr);
 
-    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+        ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
-    // Setup default Unity-style layout only when no saved layout exists.
-    // This preserves user customizations across restarts while still
-    // providing the correct initial tab arrangement on first launch
-    // (or after a layout-version bump that deletes imgui.ini).
-    if (needsDefaultLayout) {
+        // Setup default Unity-style layout only when no saved layout exists.
+        // This preserves user customizations across restarts while still
+        // providing the correct initial tab arrangement on first launch
+        // (or after a layout-version bump that deletes imgui.ini).
+        if (needsDefaultLayout) {
 
-        ImGui::DockBuilderRemoveNode(dockspaceId);
-        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspaceId,
-                                      ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - kStatusBarHeight));
+            ImGui::DockBuilderRemoveNode(dockspaceId);
+            ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+            ImGui::DockBuilderSetNodeSize(dockspaceId,
+                                          ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - kStatusBarHeight));
 
-        // Split: Main area | Right panel (Inspector)
-        ImGuiID dockMain;
-        ImGuiID dockRight;
-        ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Right, 0.25f, &dockRight, &dockMain);
+            // Split: Main area | Right panel (Inspector)
+            ImGuiID dockMain;
+            ImGuiID dockRight;
+            ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Right, 0.25f, &dockRight, &dockMain);
 
-        // Split main: Top area (Hierarchy+Scene) | Bottom (Console/Project)
-        ImGuiID dockTop;
-        ImGuiID dockBottom;
-        ImGui::DockBuilderSplitNode(dockMain, ImGuiDir_Down, 0.30f, &dockBottom, &dockTop);
+            // Split main: Top area (Hierarchy+Scene) | Bottom (Console/Project)
+            ImGuiID dockTop;
+            ImGuiID dockBottom;
+            ImGui::DockBuilderSplitNode(dockMain, ImGuiDir_Down, 0.30f, &dockBottom, &dockTop);
 
-        // Split top: Left (Hierarchy) | Center-top (Toolbar+Scene)
-        ImGuiID dockLeft;
-        ImGuiID dockCenterTop;
-        ImGui::DockBuilderSplitNode(dockTop, ImGuiDir_Left, 0.20f, &dockLeft, &dockCenterTop);
+            // Split top: Left (Hierarchy) | Center-top (Toolbar+Scene)
+            ImGuiID dockLeft;
+            ImGuiID dockCenterTop;
+            ImGui::DockBuilderSplitNode(dockTop, ImGuiDir_Left, 0.20f, &dockLeft, &dockCenterTop);
 
-        // Split center-top: Toolbar (thin strip) | Scene/Game
-        ImGuiID dockToolbar;
-        ImGuiID dockScene;
-        ImGui::DockBuilderSplitNode(dockCenterTop, ImGuiDir_Up, 0.04f, &dockToolbar, &dockScene);
+            // Split center-top: Toolbar (thin strip) | Scene/Game
+            ImGuiID dockToolbar;
+            ImGuiID dockScene;
+            ImGui::DockBuilderSplitNode(dockCenterTop, ImGuiDir_Up, 0.04f, &dockToolbar, &dockScene);
 
-        // Set a fixed size for the toolbar node so it doesn't stretch
-        ImGui::DockBuilderSetNodeSize(dockToolbar, ImVec2(viewport->WorkSize.x, 36));
+            // Set a fixed size for the toolbar node so it doesn't stretch
+            ImGui::DockBuilderSetNodeSize(dockToolbar, ImVec2(viewport->WorkSize.x, 36));
 
-        // Hide tab bar on toolbar node — it should be locked in place
-        ImGuiDockNode *toolbarNode = ImGui::DockBuilderGetNode(dockToolbar);
-        if (toolbarNode) {
-            toolbarNode->SetLocalFlags(toolbarNode->LocalFlags | ImGuiDockNodeFlags_NoTabBar |
-                                       ImGuiDockNodeFlags_NoDockingSplit | ImGuiDockNodeFlags_NoResize |
-                                       ImGuiDockNodeFlags_NoUndocking);
+            // Hide tab bar on toolbar node — it should be locked in place
+            ImGuiDockNode *toolbarNode = ImGui::DockBuilderGetNode(dockToolbar);
+            if (toolbarNode) {
+                toolbarNode->SetLocalFlags(toolbarNode->LocalFlags | ImGuiDockNodeFlags_NoTabBar |
+                                           ImGuiDockNodeFlags_NoDockingSplit | ImGuiDockNodeFlags_NoResize |
+                                           ImGuiDockNodeFlags_NoUndocking);
+            }
+
+            // Dock windows to their positions.
+            // Window IDs use the ### separator so the docking layout is
+            // independent of the displayed (localised) title.  The text
+            // before ### is ignored for ID purposes; only the part after
+            // ### must match what the Python panel passes to ImGui::Begin.
+            ImGui::DockBuilderDockWindow("###hierarchy", dockLeft);
+            ImGui::DockBuilderDockWindow("###inspector", dockRight);
+            ImGui::DockBuilderDockWindow("###toolbar", dockToolbar);
+            ImGui::DockBuilderDockWindow("###scene_view", dockScene);
+            ImGui::DockBuilderDockWindow("###game_view", dockScene);
+            ImGui::DockBuilderDockWindow("###ui_editor", dockScene);
+            ImGui::DockBuilderDockWindow("###console", dockBottom);
+            ImGui::DockBuilderDockWindow("###project", dockBottom);
+
+            ImGui::DockBuilderFinish(dockspaceId);
+
+            // Ensure Scene tab is the active/selected tab after initial layout
+            ImGui::SetWindowFocus("###scene_view");
         }
 
-        // Dock windows to their positions.
-        // Window IDs use the ### separator so the docking layout is
-        // independent of the displayed (localised) title.  The text
-        // before ### is ignored for ID purposes; only the part after
-        // ### must match what the Python panel passes to ImGui::Begin.
-        ImGui::DockBuilderDockWindow("###hierarchy", dockLeft);
-        ImGui::DockBuilderDockWindow("###inspector", dockRight);
-        ImGui::DockBuilderDockWindow("###toolbar", dockToolbar);
-        ImGui::DockBuilderDockWindow("###scene_view", dockScene);
-        ImGui::DockBuilderDockWindow("###game_view", dockScene);
-        ImGui::DockBuilderDockWindow("###ui_editor", dockScene);
-        ImGui::DockBuilderDockWindow("###console", dockBottom);
-        ImGui::DockBuilderDockWindow("###project", dockBottom);
-
-        ImGui::DockBuilderFinish(dockspaceId);
-
-        // Ensure Scene tab is the active/selected tab after initial layout
-        ImGui::SetWindowFocus("###scene_view");
-    }
-
-    ImGui::End();
+        ImGui::End();
+    } // !m_playerMode
 
     using hrc = std::chrono::high_resolution_clock;
     m_lastPanelTimesMs.clear();
@@ -624,20 +635,9 @@ uint64_t InxGUI::UploadTextureForImGui(const std::string &name, const unsigned c
     VkCommandBuffer cmdBuf = m_vkCore_ptr->BeginSingleTimeCommands();
 
     // Transition to TRANSFER_DST
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = tex.image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = 0;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    VkImageMemoryBarrier barrier =
+        vkrender::MakeImageBarrier(tex.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
 
     vkCmdPipelineBarrier(cmdBuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &barrier);
@@ -657,10 +657,9 @@ uint64_t InxGUI::UploadTextureForImGui(const std::string &name, const unsigned c
     vkCmdCopyBufferToImage(cmdBuf, stagingBuffer, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     // Transition to SHADER_READ_ONLY
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier = vkrender::MakeImageBarrier(tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     vkCmdPipelineBarrier(cmdBuf, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &barrier);

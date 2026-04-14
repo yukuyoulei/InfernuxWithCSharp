@@ -122,7 +122,8 @@ def _normalize_path(path: str) -> str:
 def _is_path_within(path: str, parent_path: str) -> bool:
     try:
         return os.path.commonpath([_normalize_path(path), _normalize_path(parent_path)]) == _normalize_path(parent_path)
-    except ValueError:
+    except ValueError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         return False
 
 
@@ -137,6 +138,25 @@ def _iter_asset_move_pairs(old_path: str, new_path: str):
         yield old_path, new_path
 
 
+def _update_build_settings_scene_path(old_path: str, new_path: str):
+    """Replace *old_path* with *new_path* in BuildSettings.json scene list."""
+    try:
+        from .build_settings_panel import load_build_settings, save_build_settings
+        settings = load_build_settings()
+        scenes = settings.get("scenes", [])
+        old_norm = os.path.normcase(os.path.abspath(old_path))
+        changed = False
+        for i, s in enumerate(scenes):
+            if os.path.normcase(os.path.abspath(s)) == old_norm:
+                scenes[i] = os.path.abspath(new_path)
+                changed = True
+        if changed:
+            settings["scenes"] = scenes
+            save_build_settings(settings)
+    except Exception as _exc:
+        Debug.log(f"[BuildSettings] Failed to update scene path: {_exc}")
+
+
 def _notify_asset_moved(old_path: str, new_path: str, asset_database=None):
     from Infernux.core.assets import AssetManager
     from . import asset_inspector
@@ -144,13 +164,19 @@ def _notify_asset_moved(old_path: str, new_path: str, asset_database=None):
     if asset_database:
         try:
             asset_database.on_asset_moved(old_path, new_path)
-        except Exception:
+        except Exception as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
 
     try:
         AssetManager.on_asset_moved(old_path, new_path)
-    except Exception:
+    except Exception as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         pass
+
+    # Update BuildSettings.json when a .scene file is renamed/moved
+    if old_path.lower().endswith(".scene"):
+        _update_build_settings_scene_path(old_path, new_path)
 
     asset_inspector.invalidate_asset(old_path)
     asset_inspector.invalidate_asset(new_path)
@@ -170,7 +196,11 @@ def move_path(old_path: str, new_path: str, asset_database=None):
         return None
 
     move_pairs = list(_iter_asset_move_pairs(old_abs, new_abs))
-    shutil.move(old_abs, new_abs)
+    try:
+        shutil.move(old_abs, new_abs)
+    except OSError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+        return None
 
     for old_file, new_file in move_pairs:
         _notify_asset_moved(old_file, new_file, asset_database)
@@ -216,7 +246,10 @@ def create_folder(current_path: str, folder_name: str):
     if os.path.exists(new_path):
         return False, f"'{folder_name}' already exists"
 
-    os.makedirs(new_path)
+    try:
+        os.makedirs(new_path)
+    except OSError as exc:
+        return False, str(exc)
     return True, ""
 
 
@@ -248,12 +281,18 @@ def create_script(current_path: str, script_name: str, asset_database=None):
         return False, f"'{script_name}' already exists"
 
     content = SCRIPT_TEMPLATE.format(class_name=class_name)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as exc:
+        return False, str(exc)
 
     if asset_database:
-        guid = asset_database.import_asset(file_path)
-        print(f"[ProjectPanel] Registered script: {script_name} -> {guid}")
+        try:
+            guid = asset_database.import_asset(file_path)
+            print(f"[ProjectPanel] Registered script: {script_name} -> {guid}")
+        except Exception as exc:
+            return False, str(exc)
 
     return True, ""
 
@@ -286,12 +325,18 @@ def create_shader(current_path: str, shader_name: str, shader_type: str,
     else:
         content = FRAGMENT_SHADER_TEMPLATE.format(shader_id=shader_id)
 
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as exc:
+        return False, str(exc)
 
     if asset_database:
-        guid = asset_database.import_asset(file_path)
-        print(f"[ProjectPanel] Registered shader: {file_name} -> {guid}")
+        try:
+            guid = asset_database.import_asset(file_path)
+            print(f"[ProjectPanel] Registered shader: {file_name} -> {guid}")
+        except Exception as exc:
+            return False, str(exc)
 
     return True, ""
 
@@ -315,12 +360,18 @@ def create_scene(current_path: str, scene_name: str, asset_database=None):
         return False, f"'{file_name}' already exists"
 
     content = SCENE_TEMPLATE.format(scene_name=scene_name)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as exc:
+        return False, str(exc)
 
     if asset_database:
-        guid = asset_database.import_asset(file_path)
-        print(f"[ProjectPanel] Registered scene: {file_name} -> {guid}")
+        try:
+            guid = asset_database.import_asset(file_path)
+            print(f"[ProjectPanel] Registered scene: {file_name} -> {guid}")
+        except Exception as exc:
+            return False, str(exc)
 
     return True, file_path
 
@@ -344,17 +395,25 @@ def create_material(current_path: str, material_name: str, asset_database=None):
         return False, f"'{file_name}' already exists"
 
     content = MATERIAL_TEMPLATE.format(material_name=material_name)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(content)
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except OSError as exc:
+        return False, str(exc)
 
     if asset_database:
-        guid = asset_database.import_asset(file_path)
-        print(f"[ProjectPanel] Registered material: {file_name} -> {guid}")
+        try:
+            guid = asset_database.import_asset(file_path)
+            print(f"[ProjectPanel] Registered material: {file_name} -> {guid}")
+        except Exception as exc:
+            return False, str(exc)
 
     return True, ""
 
 
-def create_prefab_from_gameobject(game_object, current_path: str, asset_database=None):
+def create_prefab_from_gameobject(game_object, current_path: str,
+                                  asset_database=None,
+                                  source_canvas_name: str = ""):
     """Save a GameObject hierarchy as a ``.prefab`` file.
 
     Returns ``(True, file_path)`` or ``(False, error_msg)``.
@@ -367,7 +426,8 @@ def create_prefab_from_gameobject(game_object, current_path: str, asset_database
     prefab_name = get_unique_name(current_path, game_object.name, PREFAB_EXTENSION)
     file_path = os.path.join(current_path, prefab_name + PREFAB_EXTENSION)
 
-    if save_prefab(game_object, file_path, asset_database=asset_database):
+    if save_prefab(game_object, file_path, asset_database=asset_database,
+                   source_canvas_name=source_canvas_name):
         return True, file_path
     return False, "Failed to save prefab"
 
@@ -376,12 +436,53 @@ def create_prefab_from_gameobject(game_object, current_path: str, asset_database
 # Delete & Rename
 # ---------------------------------------------------------------------------
 
+def _detach_prefab_instances(prefab_path: str, asset_database=None):
+    """Clear prefab_guid/prefab_root on all scene objects linked to this prefab."""
+    guid = ""
+    if asset_database:
+        try:
+            guid = asset_database.get_guid_from_path(prefab_path)
+        except Exception:
+            pass
+    if not guid:
+        return
+
+    from Infernux.lib import SceneManager
+    scene = SceneManager.instance().get_active_scene()
+    if scene is None:
+        return
+
+    def _walk(objects):
+        for obj in objects:
+            try:
+                obj_guid = getattr(obj, 'prefab_guid', '')
+                if obj_guid == guid:
+                    obj.prefab_guid = ""
+                    obj.prefab_root = False
+                children = list(obj.get_children()) if hasattr(obj, 'get_children') else []
+                _walk(children)
+            except Exception:
+                pass
+
+    try:
+        roots = list(scene.get_root_objects())
+        _walk(roots)
+    except Exception as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+
+
 def delete_item(item_path: str, asset_database=None):
     """Delete a file or directory from the filesystem and notify AssetDatabase."""
     if not item_path or not os.path.exists(item_path):
         return
 
     is_dir = os.path.isdir(item_path)
+
+    # For .prefab files, detach all scene instances BEFORE deleting the asset.
+    # This turns prefab instances into regular scene objects instead of leaving
+    # them orphaned with a dangling prefab_guid.
+    if not is_dir and item_path.lower().endswith('.prefab'):
+        _detach_prefab_instances(item_path, asset_database)
 
     # Notify BEFORE removing the file — GUID is still resolvable at this point
     if not is_dir:
@@ -391,11 +492,15 @@ def delete_item(item_path: str, asset_database=None):
         if asset_database:
             asset_database.on_asset_deleted(item_path)
 
-    if is_dir:
-        import shutil
-        shutil.rmtree(item_path)
-    else:
-        os.remove(item_path)
+    try:
+        if is_dir:
+            import shutil
+            shutil.rmtree(item_path)
+        else:
+            os.remove(item_path)
+    except OSError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+        return
 
     # Invalidate inspector cache so a recreated file won't reuse stale data
     from . import asset_inspector
@@ -425,6 +530,10 @@ def do_rename(old_path: str, new_name: str, asset_database=None):
 
     _, ext = os.path.splitext(old_path)
     if ext.lower() == '.mat' and os.path.isfile(old_path):
-        update_material_name_in_file(old_path, os.path.splitext(safe_name)[0])
+        try:
+            update_material_name_in_file(old_path, os.path.splitext(safe_name)[0])
+        except OSError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+            return None
 
     return move_path(old_path, new_path, asset_database)

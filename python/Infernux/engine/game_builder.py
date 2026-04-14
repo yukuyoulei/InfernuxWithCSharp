@@ -1,11 +1,10 @@
 """
 GameBuilder — packages a standalone native game from an Infernux project.
 
-Uses **Nuitka** to compile the Python-based engine bootstrap into a native
-EXE. All engine code, dependencies, and the CPython runtime are bundled
-into a self-contained directory. Project-authored C# gameplay scripts are
-copied under ``Data/Scripts`` and built into ``Data/Managed`` with
-``dotnet build``.
+Uses **Nuitka** to compile the Python entry script into a native EXE.
+All engine code, dependencies, and the CPython runtime are bundled into
+a self-contained directory.  User scripts (.py in Assets/) are compiled
+to .pyc with ``py_compile`` for source protection.
 
 Output layout::
 
@@ -18,10 +17,8 @@ Output layout::
                 _Infernux.*.pyd ← pybind11 extension module
                 SDL3.dll …       ← DLLs (for os.add_dll_directory)
         Data/
-            Assets/             ← game scenes, textures, models
+            Assets/             ← game scenes, scripts(.pyc), textures, models
             ProjectSettings/    ← build & tag-layer settings
-            Scripts/            ← copied C# project sources
-            Managed/            ← compiled C# gameplay assemblies
             materials/
             Splash/             ← splash images + .infsplash video data
             BuildManifest.json  ← display mode, window size, splash config
@@ -31,6 +28,8 @@ from __future__ import annotations
 
 import json
 import os
+import py_compile
+import re
 import shutil
 import struct
 import subprocess
@@ -39,6 +38,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
+import Infernux._jit_kernels as _jit_kernels
 from Infernux.debug import Debug
 from Infernux.engine.csharp_tooling import ensure_csharp_tooling
 from Infernux.engine.i18n import t
@@ -102,12 +102,15 @@ class BuildOutputDirectoryError(ValueError):
 
         super().__init__(message)
 
+from ._build_splash import BuildSplashMixin
+from ._build_dependencies import BuildDependencyMixin
 
-class GameBuilder:
+
+class GameBuilder(BuildSplashMixin, BuildDependencyMixin):
     """Build a standalone native game distribution using Nuitka."""
 
     OUTPUT_MARKER_FILENAME = ".infernux-build-output"
-    _GAME_DATA_DIRS = ["Assets", "ProjectSettings", "materials", "Scripts"]
+    _GAME_DATA_DIRS = ["Assets", "ProjectSettings", "materials"]
     _EXCLUDE_PATTERNS = {"__pycache__", ".git", ".gitignore", ".infernux-engine-lock.json"}
     _ICON_EXTS = {".png", ".jpg", ".jpeg", ".ico"}
 
@@ -123,6 +126,9 @@ class GameBuilder:
         window_height: int = 720,
         window_resizable: bool = True,
         splash_items: Optional[List[Dict]] = None,
+        debug_mode: bool = False,
+        lto: bool = True,
+        enable_jit: bool = False,
     ):
         self.project_path = os.path.abspath(project_path)
         self.project_name = game_name.strip() if game_name.strip() else os.path.basename(self.project_path)
@@ -133,6 +139,9 @@ class GameBuilder:
         self.window_height = window_height
         self.window_resizable = window_resizable
         self.splash_items = list(splash_items) if splash_items else []
+        self.debug_mode = debug_mode
+        self.lto = lto
+        self.enable_jit = enable_jit
 
     # ------------------------------------------------------------------
     # Public API
@@ -146,61 +155,116 @@ class GameBuilder:
         """Run the full build pipeline.  Returns the final output directory."""
 
         build_start = time.perf_counter()
+        _stage_t0 = build_start
+
+        # ── Build log file ────────────────────────────────────────────
+        log_dir = os.path.join(self.project_path, "Logs")
+        os.makedirs(log_dir, exist_ok=True)
+        build_log_path = os.path.join(log_dir, "build.log")
+        build_log = open(build_log_path, "w", encoding="utf-8")
+
+        def _blog(msg: str):
+            """Write to both the engine console and the build log file."""
+            try:
+                build_log.write(msg + "\n")
+                build_log.flush()
+            except OSError as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                pass
 
         def _p(msg: str, pct: float):
+            nonlocal _stage_t0
             if cancel_event is not None and cancel_event.is_set():
                 raise _BuildCancelled()
+            now = time.perf_counter()
+            elapsed = now - _stage_t0
+            _stage_t0 = now
             if on_progress:
                 on_progress(msg, pct)
-            Debug.log_internal(f"[Build {pct:.0%}] {msg}")
+            log_msg = (
+                f"[Build {pct:.0%}] {msg}  (prev stage {elapsed:.2f}s, "
+                f"total {now - build_start:.1f}s)"
+            )
+            Debug.log_internal(log_msg)
+            _blog(log_msg)
 
-        _p("验证项目 Validating project...", 0.00)
+        try:
+            return self._build_inner(_p, _blog, on_progress, cancel_event, build_start)
+        except _BuildCancelled:
+            _blog("Build cancelled by user.")
+            raise
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            _blog(f"BUILD FAILED: {tb}")
+            Debug.log_error(
+                f"Build failed — see {build_log_path} for details.\n{exc}"
+            )
+            raise
+        finally:
+            try:
+                build_log.close()
+            except OSError as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                pass
+
+    def _build_inner(self, _p, _blog, on_progress, cancel_event, build_start) -> str:
+        """Internal build pipeline (separated for clean exception handling)."""
+
+        _p(t("build.step.validating"), 0.00)
         self._validate()
 
-        _p("清理输出目录 Cleaning output...", 0.02)
+        _p(t("build.step.cleaning_output"), 0.02)
         self._clean_output()
 
-        _p("生成入口脚本 Generating boot script...", 0.05)
+        _p(t("build.step.collecting_deps"), 0.04)
+        user_packages = self._collect_user_dependencies()
+
+        _p(t("build.step.generating_boot"), 0.05)
         boot_script = self._generate_boot_script()
 
-        _p("Nuitka 原生编译 Nuitka native compilation...", 0.06)
-        dist_dir = self._run_nuitka(boot_script, on_progress, cancel_event)
+        _p(t("build.step.nuitka_compilation"), 0.06)
+        dist_dir = self._run_nuitka(boot_script, on_progress, user_packages, cancel_event)
 
-        _p("整理输出目录 Organizing output directory...", 0.86)
+        _p(t("build.step.organizing_output"), 0.86)
         final_dir = self._organize_output(dist_dir)
 
-        _p("复制游戏数据 Copying game data...", 0.88)
+        _p(t("build.step.copying_data"), 0.88)
         self._copy_game_data(final_dir)
 
-        _p("构建 C# 脚本 Building C# scripts...", 0.91)
+        _p(t("build.step.compiling_scripts"), 0.91)
+        self._compile_user_scripts(final_dir)
         self._build_csharp_scripts(final_dir)
 
-        _p("处理开场画面 Processing splash items...", 0.93)
+        _p(t("build.step.processing_splash"), 0.93)
         self._process_splash_items(final_dir)
 
-        _p("处理场景路径 Fixing scene paths...", 0.96)
+        _p(t("build.step.fixing_scenes"), 0.96)
         self._relativize_scenes(final_dir)
 
-        _p("生成构建清单 Generating manifest...", 0.97)
+        _p(t("build.step.generating_manifest"), 0.97)
         self._generate_manifest(final_dir)
 
-        _p("清理冗余资源 Cleaning redundant resources...", 0.98)
+        _p(t("build.step.cleaning_redundant"), 0.98)
         self._cleanup_dist(final_dir)
 
-        _p("写入构建标记 Writing build marker...", 0.985)
+        _p(t("build.step.writing_marker"), 0.985)
         self._write_output_marker(final_dir)
 
-        _p("清理临时文件 Cleaning temp files...", 0.99)
+        _p(t("build.step.cleaning_temp"), 0.99)
         self._cleanup_temp(boot_script)
 
-        _p("构建完成 Build complete!", 1.0)
+        # Log per-directory size breakdown so the user sees where size goes
+        self._report_build_size(final_dir, _blog)
+
+        _p(t("build.step.complete"), 1.0)
         elapsed_seconds = time.perf_counter() - build_start
-        Debug.log(
-            t("build.completed_log").format(
-                path=final_dir,
-                seconds=elapsed_seconds,
-            )
+        done_msg = t("build.completed_log").format(
+            path=final_dir,
+            seconds=elapsed_seconds,
         )
+        Debug.log(done_msg)
+        _blog(done_msg)
         return final_dir
 
     # ------------------------------------------------------------------
@@ -294,11 +358,19 @@ class GameBuilder:
         for name in os.listdir(self.output_dir):
             path = os.path.join(self.output_dir, name)
             if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path, ignore_errors=True)
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["cmd", "/c", "rd", "/s", "/q", path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                else:
+                    shutil.rmtree(path, ignore_errors=True)
             else:
                 try:
                     os.remove(path)
-                except FileNotFoundError:
+                except FileNotFoundError as _exc:
+                    Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
                     continue
 
             if os.path.exists(path):
@@ -326,6 +398,9 @@ class GameBuilder:
 
         Returns the path to the temporary boot script.
         """
+        _debug_mode = self.debug_mode
+        _log_level_str = "LogLevel.Debug" if _debug_mode else "LogLevel.Info"
+
         boot_src = f'''\
 """Infernux Game — compiled entry point."""
 import os
@@ -336,16 +411,52 @@ import traceback
 # package skips heavy editor-only UI panels and watchdog file watcher.
 os.environ["_INFERNUX_PLAYER_MODE"] = "1"
 
+_DEBUG_MODE = {_debug_mode!r}
+
 # Determine the directory containing the executable
 _DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 if not os.path.isdir(os.path.join(_DIR, "Data")):
     _DIR = os.path.dirname(os.path.abspath(sys.executable))
+
+# Ensure raw-copied JIT packages (numba, numpy, llvmlite) are importable.
+# Nuitka standalone may not include the exe directory in sys.path by default.
+if _DIR not in sys.path:
+    sys.path.insert(0, _DIR)
+
+# On Windows, add the exe directory as a DLL search path so that
+# native extensions inside raw-copied packages can find their .dll deps.
+if sys.platform == 'win32':
+    try:
+        os.add_dll_directory(_DIR)
+    except OSError:
+        pass
+    # Pre-load bundled MSVC CRT DLLs so the dynamic linker can resolve
+    # them even on machines without Visual C++ Redistributable installed.
+    import ctypes as _ctypes
+    for _crt in ('vcruntime140.dll', 'vcruntime140_1.dll',
+                 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+                 'msvcp140_atomic_wait.dll', 'msvcp140_codecvt_ids.dll',
+                 'concrt140.dll'):
+        _crt_path = os.path.join(_DIR, _crt)
+        if os.path.isfile(_crt_path):
+            try:
+                _ctypes.WinDLL(_crt_path)
+            except OSError:
+                pass
+    del _ctypes
 
 # Logs go into Data/Logs/ to keep the root directory clean
 _LOGS_DIR = os.path.join(_DIR, "Data", "Logs")
 os.makedirs(_LOGS_DIR, exist_ok=True)
 _LOG = os.path.join(_LOGS_DIR, "player.log")
 os.environ["_INFERNUX_PLAYER_LOG"] = _LOG
+
+# Debug mode: write a detailed log next to the executable
+if _DEBUG_MODE:
+    _DEBUG_LOG = os.path.join(_DIR, "{self.project_name}_debug.log")
+    _debug_fh = open(_DEBUG_LOG, "w", encoding="utf-8")
+    sys.stdout = _debug_fh
+    sys.stderr = _debug_fh
 
 # Clear previous log
 try:
@@ -359,6 +470,8 @@ def _log(msg):
             _f.write(str(msg) + "\\n")
     except OSError:
         pass
+    if _DEBUG_MODE:
+        print(msg, flush=True)
 
 def _crash_report(exc):
     """Write crash details to a log file and show a Windows message box."""
@@ -386,12 +499,18 @@ try:
     _log("boot: calling run_player")
     run_player(
         project_path=os.path.join(_DIR, "Data"),
-        engine_log_level=LogLevel.Info,
+        engine_log_level={_log_level_str},
     )
     _log("boot: run_player returned")
 except Exception as _exc:
     _crash_report(_exc)
     sys.exit(1)
+finally:
+    if _DEBUG_MODE:
+        try:
+            _debug_fh.close()
+        except Exception:
+            pass
 '''
         # Write boot script to a temp location (NuitkaBuilder will copy
         # it into its ASCII-safe staging directory).
@@ -410,6 +529,7 @@ except Exception as _exc:
         self,
         boot_script: str,
         on_progress: Optional[Callable[[str, float], None]],
+        user_packages: Optional[List[str]] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
         """Invoke NuitkaBuilder. Returns the dist directory path."""
@@ -417,12 +537,25 @@ except Exception as _exc:
 
         selected_icon = self.icon_path if self.icon_path else icon_path
 
+        # Separate JIT-related packages that must be raw-copied (not
+        # compiled by Nuitka) from ordinary packages that Nuitka should
+        # compile normally.
+        jit_set = NuitkaBuilder._JIT_NOFOLLOW_PACKAGES
+        all_pkgs = user_packages or []
+        compiled_pkgs = [p for p in all_pkgs if p not in jit_set]
+        jit_pkgs = [p for p in all_pkgs if p in jit_set] if self.enable_jit else []
+
         nk = NuitkaBuilder(
             entry_script=boot_script,
             output_dir=self.output_dir,
             output_filename=f"{self.project_name}.exe",
             product_name=self.project_name,
             icon_path=selected_icon if selected_icon and os.path.isfile(selected_icon) else None,
+            extra_include_packages=compiled_pkgs,
+            extra_requirements_files=self._project_requirement_files(),
+            raw_copy_packages=jit_pkgs,
+            console_mode="force" if self.debug_mode else "disable",
+            lto=self.lto,
         )
 
         def _nk_progress(msg: str, pct: float):
@@ -432,6 +565,10 @@ except Exception as _exc:
                 on_progress(msg, mapped)
 
         return nk.build(on_progress=_nk_progress, cancel_event=cancel_event)
+
+    # ------------------------------------------------------------------
+    # Organize output: move dist contents to the final output directory
+    # ------------------------------------------------------------------
 
     def _organize_output(self, dist_dir: str) -> str:
         """Move Nuitka dist contents from staging into self.output_dir.
@@ -444,19 +581,56 @@ except Exception as _exc:
         final_dir = self.output_dir
         os.makedirs(final_dir, exist_ok=True)
 
-        for item in os.listdir(dist_dir):
-            src = os.path.join(dist_dir, item)
-            dst = os.path.join(final_dir, item)
-            if os.path.exists(dst):
-                if os.path.isdir(dst):
-                    shutil.rmtree(dst)
-                else:
-                    os.remove(dst)
-            shutil.move(src, dst)
+        _move_t0 = time.perf_counter()
 
-        # Remove the now-empty dist directory and its staging parent
+        if sys.platform == "win32":
+            # robocopy /MOVE /E is dramatically faster than per-item
+            # shutil.move for large directory trees (native NTFS ops).
+            rc = subprocess.call(
+                ["robocopy", dist_dir, final_dir, "/E", "/MOVE",
+                 "/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000,
+            )
+            if rc >= 8:
+                Debug.log_warning(
+                    f"robocopy /MOVE failed (exit {rc}), falling back to Python move"
+                )
+                for item in os.listdir(dist_dir):
+                    src = os.path.join(dist_dir, item)
+                    dst = os.path.join(final_dir, item)
+                    if os.path.exists(dst):
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        else:
+                            os.remove(dst)
+                    shutil.move(src, dst)
+        else:
+            for item in os.listdir(dist_dir):
+                src = os.path.join(dist_dir, item)
+                dst = os.path.join(final_dir, item)
+                if os.path.exists(dst):
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    else:
+                        os.remove(dst)
+                shutil.move(src, dst)
+
+        Debug.log_internal(
+            f"  moved dist to output in {time.perf_counter() - _move_t0:.2f}s"
+        )
+
+        # Remove the now-empty staging parent
         staging_parent = os.path.dirname(dist_dir)
-        shutil.rmtree(staging_parent, ignore_errors=True)
+        if sys.platform == "win32":
+            subprocess.run(
+                ["cmd", "/c", "rd", "/s", "/q", staging_parent],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            shutil.rmtree(staging_parent, ignore_errors=True)
 
         return final_dir
 
@@ -465,14 +639,165 @@ except Exception as _exc:
     # ------------------------------------------------------------------
 
     def _copy_game_data(self, final_dir: str):
-        """Copy project data folders into ``Data/``."""
+        """Copy Assets, ProjectSettings, materials to Data/."""
         data_dir = os.path.join(final_dir, "Data")
         ignore = shutil.ignore_patterns(*self._EXCLUDE_PATTERNS)
         for dirname in self._GAME_DATA_DIRS:
             src = os.path.join(self.project_path, dirname)
             dst = os.path.join(data_dir, dirname)
             if os.path.isdir(src):
-                shutil.copytree(src, dst, ignore=ignore)
+                _t0 = time.perf_counter()
+                if sys.platform == "win32":
+                    os.makedirs(dst, exist_ok=True)
+                    rc = subprocess.call(
+                        ["robocopy", src, dst, "/E",
+                         "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
+                         "/XD", "__pycache__", ".git"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=0x08000000,
+                    )
+                    if rc >= 8:
+                        Debug.log_warning(
+                            f"robocopy failed for {dirname}/ (exit {rc}), "
+                            f"falling back to shutil.copytree"
+                        )
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst)
+                        shutil.copytree(src, dst, ignore=ignore)
+                else:
+                    shutil.copytree(src, dst, ignore=ignore)
+                Debug.log_internal(
+                    f"  copied {dirname}/ in {time.perf_counter() - _t0:.2f}s"
+                )
+
+        # When JIT is disabled, strip numba from the shipped requirements
+        # so the player runtime doesn't warn about "missing packages: numba".
+        if not self.enable_jit:
+            req_file = os.path.join(data_dir, "ProjectSettings", "requirements.txt")
+            if os.path.isfile(req_file):
+                with open(req_file, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                filtered = [
+                    ln for ln in lines
+                    if not re.match(r"^\s*numba\b", ln, re.IGNORECASE)
+                ]
+                if len(filtered) != len(lines):
+                    with open(req_file, "w", encoding="utf-8") as f:
+                        f.writelines(filtered)
+
+    # ------------------------------------------------------------------
+    # Collect user script dependencies
+    # ------------------------------------------------------------------
+
+    # Packages that are already bundled by the engine or excluded on
+    # purpose — never add them via --include-package even if a user
+    # script imports them.
+    _BUILTIN_MODULES = frozenset({
+        # Standard library (always available in the Nuitka bundle)
+        *sys.stdlib_module_names,
+        # Engine packages (already followed by Nuitka via boot.py)
+        "Infernux",
+        # Excluded editor-only / build-only packages
+        "watchdog", "PIL", "cv2", "imageio", "psd_tools",
+        "tkinter", "unittest", "test", "pip", "setuptools",
+        "distutils", "ensurepip",
+    })
+
+    # ------------------------------------------------------------------
+    # Compile user scripts
+    # ------------------------------------------------------------------
+
+    def _compile_user_scripts(self, final_dir: str):
+        """Compile .py in Data/Assets/ to .pyc and remove originals.
+
+        Also generates ``Data/_script_guid_map.json`` so that the
+        player can resolve script GUIDs without the original ``.py``
+        files (the C++ AssetDatabase only recognises ``.py``).
+        """
+        assets_dir = os.path.join(final_dir, "Data", "Assets")
+        if not os.path.isdir(assets_dir):
+            return
+
+        _compile_t0 = time.perf_counter()
+        _compile_count = 0
+        data_dir = os.path.join(final_dir, "Data")
+        guid_map: dict[str, str] = {}
+
+        # First pass: build GUID → .pyc relative-path map from .meta
+        for root, _dirs, files in os.walk(assets_dir):
+            for fname in files:
+                if fname.endswith(".py"):
+                    py_path = os.path.join(root, fname)
+                    meta_path = py_path + ".meta"
+                    if os.path.isfile(meta_path):
+                        try:
+                            with open(meta_path, "r", encoding="utf-8") as mf:
+                                meta = json.load(mf)
+                            guid = (meta.get("metadata", {})
+                                        .get("guid", {})
+                                        .get("value", ""))
+                            if guid:
+                                pyc_rel = os.path.relpath(
+                                    py_path + "c", data_dir
+                                ).replace("\\", "/")
+                                guid_map[guid] = pyc_rel
+                        except (json.JSONDecodeError, OSError) as _exc:
+                            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                            pass
+
+        # Second pass: compile and remove originals
+        for root, _dirs, files in os.walk(assets_dir):
+            for fname in files:
+                if fname.endswith(".py"):
+                    py_path = os.path.join(root, fname)
+                    _compile_count += 1
+                    try:
+                        with open(py_path, "r", encoding="utf-8") as sf:
+                            source_text = sf.read()
+                        sidecar_source = _jit_kernels.build_auto_parallel_sidecar_source(source_text)
+                        if sidecar_source:
+                            sidecar_py = py_path[:-3] + ".autop.py"
+                            with open(sidecar_py, "w", encoding="utf-8", newline="\n") as apf:
+                                apf.write(sidecar_source)
+                            py_compile.compile(
+                                sidecar_py,
+                                cfile=sidecar_py + "c",
+                                optimize=2,
+                                doraise=True,
+                            )
+                            os.remove(sidecar_py)
+                            Debug.log_internal(
+                                f"  auto_parallel sidecar: {os.path.basename(sidecar_py)}c"
+                            )
+                    except (OSError, SyntaxError, py_compile.PyCompileError) as _sc_exc:
+                        Debug.log_warning(
+                            f"  auto_parallel sidecar generation failed for "
+                            f"{fname}: {_sc_exc}"
+                        )
+
+                    try:
+                        py_compile.compile(
+                            py_path,
+                            cfile=py_path + "c",
+                            optimize=2,
+                            doraise=True,
+                        )
+                        os.remove(py_path)
+                    except py_compile.PyCompileError as _exc:
+                        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                        pass
+
+        Debug.log_internal(
+            f"  compiled {_compile_count} scripts in "
+            f"{time.perf_counter() - _compile_t0:.2f}s"
+        )
+
+        # Write manifest
+        if guid_map:
+            manifest_path = os.path.join(data_dir, "_script_guid_map.json")
+            with open(manifest_path, "w", encoding="utf-8") as mf:
+                json.dump(guid_map, mf)
 
     # ------------------------------------------------------------------
     # Build project C# scripts
@@ -519,103 +844,6 @@ except Exception as _exc:
     # ------------------------------------------------------------------
     # Splash items
     # ------------------------------------------------------------------
-
-    def _process_splash_items(self, final_dir: str):
-        """Copy/convert splash items into Data/Splash/."""
-        if not self.splash_items:
-            return
-
-        splash_dir = os.path.join(final_dir, "Data", "Splash")
-        os.makedirs(splash_dir, exist_ok=True)
-
-        for item in self.splash_items:
-            src_path = item.get("path", "")
-            if not os.path.isfile(src_path):
-                Debug.log_warning(f"Splash item not found: {src_path}")
-                continue
-
-            item_type = item.get("type", "image")
-            base_name = os.path.splitext(os.path.basename(src_path))[0]
-
-            if item_type == "video":
-                out_name = base_name + ".infsplash"
-                out_path = os.path.join(splash_dir, out_name)
-                self._extract_video_frames(src_path, out_path)
-                item["_built_path"] = f"Splash/{out_name}"
-            else:
-                ext = os.path.splitext(src_path)[1]
-                out_name = base_name + ext
-                shutil.copy2(src_path, os.path.join(splash_dir, out_name))
-                item["_built_path"] = f"Splash/{out_name}"
-
-    def _extract_video_frames(self, video_path: str, output_path: str):
-        """Extract video frames to .infsplash binary blob."""
-        try:
-            import cv2
-        except ImportError:
-            try:
-                _ensure_video_splash_packages()
-                self._extract_with_imageio(video_path, output_path)
-                return
-            except ImportError:
-                raise RuntimeError(
-                    "Video splash requires opencv-python or imageio+av. "
-                    "Install: pip install opencv-python-headless  or  pip install imageio av"
-                )
-
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"Cannot open video: {video_path}")
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        frames_data: list[bytes] = []
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            _, jpeg_buf = cv2.imencode(
-                ".jpg", frame_rgb, [cv2.IMWRITE_JPEG_QUALITY, 85]
-            )
-            frames_data.append(jpeg_buf.tobytes())
-        cap.release()
-
-        self._write_infsplash(output_path, frames_data, fps, width, height)
-
-    def _extract_with_imageio(self, video_path: str, output_path: str):
-        """Fallback using imageio for video frame extraction."""
-        import imageio.v3 as iio
-
-        frames_data: list[bytes] = []
-        width = height = 0
-        for frame in iio.imiter(video_path, plugin="pyav"):
-            height, width = frame.shape[:2]
-            jpeg_bytes = iio.imwrite(
-                "<bytes>", frame, extension=".jpg", quality=85
-            )
-            frames_data.append(jpeg_bytes)
-
-        meta = iio.immeta(video_path, plugin="pyav")
-        fps = meta.get("fps", 30.0) or 30.0
-        self._write_infsplash(output_path, frames_data, fps, width, height)
-
-    @staticmethod
-    def _write_infsplash(
-        path: str, frames: list, fps: float, width: int, height: int
-    ):
-        """Write .infsplash binary (magic + header + index + JPEG data)."""
-        with open(path, "wb") as f:
-            f.write(b"INFSPLSH")
-            f.write(struct.pack("<IfII", len(frames), fps, width, height))
-            offset = 0
-            for data in frames:
-                f.write(struct.pack("<II", offset, len(data)))
-                offset += len(data)
-            for data in frames:
-                f.write(data)
 
     # ------------------------------------------------------------------
     # Relativize scene paths
@@ -692,31 +920,56 @@ except Exception as _exc:
     def _cleanup_dist(self, final_dir: str):
         """Remove editor-only and redundant files from the build output."""
         removed_bytes = 0
+        dirs_to_remove: list[str] = []
+        files_to_remove: list[str] = []
+
+        def _queue_dir(d: str):
+            if os.path.isdir(d):
+                dirs_to_remove.append(d)
+
+        def _queue_file(f: str):
+            if os.path.isfile(f):
+                files_to_remove.append(f)
 
         # Directories that are entirely unnecessary at runtime
-        remove_dirs = [
-            os.path.join(final_dir, "Infernux", "lib", "_player_runtime"),
-            os.path.join(final_dir, "Infernux", "resources", "icons"),
-            os.path.join(final_dir, "Infernux", "resources", "supports"),
-        ]
-        for d in remove_dirs:
-            if os.path.isdir(d):
-                for r, _, fs in os.walk(d):
-                    for f in fs:
-                        removed_bytes += os.path.getsize(os.path.join(r, f))
-                shutil.rmtree(d, ignore_errors=True)
+        _queue_dir(os.path.join(final_dir, "Infernux", "lib", "_player_runtime"))
+        _queue_dir(os.path.join(final_dir, "Infernux", "resources", "icons"))
+        _queue_dir(os.path.join(final_dir, "Infernux", "resources", "supports"))
+
+        # Build-time-only video packages — av (PyAV/ffmpeg) and imageio
+        # are used only for splash video encoding at build time.  The
+        # player reads pre-extracted .infsplash blobs via struct.
+        for _build_pkg in ("av", "av.libs", "imageio"):
+            _queue_dir(os.path.join(final_dir, _build_pkg))
+
+        # Remove any leaked ffmpeg DLLs from the dist root that Nuitka's
+        # DLL scanner may have copied from the av package.
+        _FFMPEG_PREFIXES = (
+            "avcodec", "avformat", "avutil", "avfilter", "avdevice",
+            "swresample", "swscale",
+        )
+        for fname in os.listdir(final_dir):
+            if fname.lower().endswith(".dll") and any(
+                fname.lower().startswith(p) for p in _FFMPEG_PREFIXES
+            ):
+                _queue_file(os.path.join(final_dir, fname))
 
         # Individual files not needed at runtime
-        remove_files = [
-            os.path.join(final_dir, "Infernux", "lib", "_Infernux.pyi"),
-            os.path.join(final_dir, "Infernux", "lib", "InfernuxLauncher.exe"),
-            os.path.join(final_dir, "Data", "ProjectSettings", "EditorSettings.json"),
-            os.path.join(final_dir, "Data", "ProjectSettings", "GameView.ini"),
-        ]
-        for f in remove_files:
-            if os.path.isfile(f):
-                removed_bytes += os.path.getsize(f)
-                os.remove(f)
+        _queue_file(os.path.join(final_dir, "Infernux", "lib", "_Infernux.pyi"))
+        _queue_file(os.path.join(final_dir, "Infernux", "lib", "InfernuxLauncher.exe"))
+        _queue_file(os.path.join(final_dir, "Data", "ProjectSettings", "EditorSettings.json"))
+        _queue_file(os.path.join(final_dir, "Data", "ProjectSettings", "GameView.ini"))
+
+        # Remove the platform-tagged .pyd duplicate — Nuitka standardises
+        # to the short name (_Infernux.pyd) and --include-package-data
+        # copies the original cp312-win_amd64.pyd as well.
+        lib_dir_dup = os.path.join(final_dir, "Infernux", "lib")
+        if os.path.isdir(lib_dir_dup):
+            for fname in os.listdir(lib_dir_dup):
+                if fname.endswith(".pyd") and ".cp" in fname:
+                    short = fname.split(".")[0] + ".pyd"
+                    if os.path.isfile(os.path.join(lib_dir_dup, short)):
+                        _queue_file(os.path.join(lib_dir_dup, fname))
 
         # Remove duplicate engine DLLs from Infernux/lib/ — they already
         # exist in the dist root (placed by Nuitka / _inject_native_libs)
@@ -726,10 +979,7 @@ except Exception as _exc:
         if os.path.isdir(lib_dir):
             for fname in os.listdir(lib_dir):
                 if fname.lower().endswith(".dll"):
-                    fp = os.path.join(lib_dir, fname)
-                    if os.path.isfile(fp):
-                        removed_bytes += os.path.getsize(fp)
-                        os.remove(fp)
+                    _queue_file(os.path.join(lib_dir, fname))
 
         # Remove .meta files from engine shaders (editor hot-reload metadata)
         shaders_dir = os.path.join(final_dir, "Infernux", "resources", "shaders")
@@ -737,9 +987,62 @@ except Exception as _exc:
             for root, _, files in os.walk(shaders_dir):
                 for fname in files:
                     if fname.endswith(".meta"):
-                        fp = os.path.join(root, fname)
-                        removed_bytes += os.path.getsize(fp)
-                        os.remove(fp)
+                        _queue_file(os.path.join(root, fname))
+
+        # ── Global cleanup: __pycache__, .dist-info, and stale .pyc ──
+        jit_dirs = {os.path.join(final_dir, p) for p in ("numba", "llvmlite", "numpy")}
+        for root, dirs, files in os.walk(final_dir, topdown=False):
+            for dname in dirs:
+                if dname == "__pycache__" or dname.endswith(".dist-info"):
+                    dirs_to_remove.append(os.path.join(root, dname))
+            # Remove stale .pyc from raw-copied JIT packages
+            if any(root == jd or root.startswith(jd + os.sep) for jd in jit_dirs):
+                for fname in files:
+                    if fname.endswith(".pyc"):
+                        files_to_remove.append(os.path.join(root, fname))
+
+        # ── Execute removals ─────────────────────────────────────────
+        # 1. Remove individual files (fast, no subprocess)
+        for f in files_to_remove:
+            try:
+                removed_bytes += os.path.getsize(f)
+            except OSError as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                pass
+            try:
+                os.remove(f)
+            except OSError as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                pass
+
+        # 2. Count bytes in queued dirs, then batch-remove
+        for d in dirs_to_remove:
+            if not os.path.isdir(d):
+                continue
+            for r, _, fs in os.walk(d):
+                for fname in fs:
+                    try:
+                        removed_bytes += os.path.getsize(os.path.join(r, fname))
+                    except OSError as _exc:
+                        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                        pass
+
+        if sys.platform == "win32" and dirs_to_remove:
+            # Single cmd process to remove all directories at once
+            rd_args = []
+            for d in dirs_to_remove:
+                if os.path.isdir(d):
+                    rd_args.extend(["rd", "/s", "/q", d, "&"])
+            if rd_args:
+                rd_args.pop()  # remove trailing "&"
+                subprocess.run(
+                    ["cmd", "/c"] + rd_args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        else:
+            for d in dirs_to_remove:
+                shutil.rmtree(d, ignore_errors=True)
 
         # Ensure Data/Logs exists for runtime log output
         logs_dir = os.path.join(final_dir, "Data", "Logs")
@@ -750,7 +1053,63 @@ except Exception as _exc:
 
     @staticmethod
     def _cleanup_temp(boot_script: str):
-        """Remove the temporary boot script directory."""
+        """Remove the temporary boot script directory.
+
+        Runs in a daemon thread so the caller returns immediately;
+        on Windows uses a single ``rd /s /q`` for speed.
+        """
         boot_dir = os.path.dirname(boot_script)
-        if os.path.isdir(boot_dir):
-            shutil.rmtree(boot_dir, ignore_errors=True)
+        if not os.path.isdir(boot_dir):
+            return
+
+        def _bg():
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["cmd", "/c", "rd", "/s", "/q", boot_dir],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                shutil.rmtree(boot_dir, ignore_errors=True)
+
+        t = threading.Thread(target=_bg, daemon=True)
+        t.start()
+
+    # ------------------------------------------------------------------
+    # Build size report
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _report_build_size(final_dir: str, _blog: Callable[[str], None]) -> None:
+        """Log a per-directory size breakdown of the final build output."""
+        total = 0
+        entries: list[tuple[str, int]] = []
+
+        for item in os.scandir(final_dir):
+            if item.is_dir(follow_symlinks=False):
+                sz = 0
+                for root, _, files in os.walk(item.path):
+                    for f in files:
+                        try:
+                            sz += os.path.getsize(os.path.join(root, f))
+                        except OSError as _exc:
+                            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                            pass
+                entries.append((item.name + "/", sz))
+            elif item.is_file(follow_symlinks=False):
+                sz = item.stat().st_size
+                entries.append((item.name, sz))
+            else:
+                continue
+            total += sz
+
+        entries.sort(key=lambda x: x[1], reverse=True)
+        lines = [f"Build size report — total {total / (1024*1024):.1f} MB"]
+        for name, sz in entries:
+            mb = sz / (1024 * 1024)
+            pct = (sz / total * 100) if total else 0
+            if mb >= 0.1:
+                lines.append(f"  {mb:7.1f} MB  {pct:4.1f}%  {name}")
+        report = "\n".join(lines)
+        Debug.log_internal(report)
+        _blog(report)

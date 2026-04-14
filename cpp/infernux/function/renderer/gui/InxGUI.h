@@ -34,6 +34,11 @@ class InxGUI
     void RecordCommand(VkCommandBuffer cmdBuf);
     void Shutdown();
 
+    void SetPlayerMode(bool enabled)
+    {
+        m_playerMode = enabled;
+    }
+
     [[nodiscard]] const std::unordered_map<std::string, double> &GetLastPanelTimesMs() const
     {
         return m_lastPanelTimesMs;
@@ -42,6 +47,15 @@ class InxGUI
     [[nodiscard]] const std::vector<std::string> &GetRenderableOrder() const
     {
         return m_renderableOrder;
+    }
+
+    /// Consume sub-timing breakdown from a named panel (returns empty if none).
+    std::unordered_map<std::string, double> ConsumePanelSubTimings(const std::string &name)
+    {
+        auto it = m_renderables_umap.find(name);
+        if (it != m_renderables_umap.end() && it->second)
+            return it->second->ConsumeSubTimings();
+        return {};
     }
 
     void Register(const std::string &name, std::shared_ptr<InxGUIRenderable> renderable);
@@ -99,6 +113,7 @@ class InxGUI
     std::unordered_map<std::string, double> m_lastPanelTimesMs;
     std::unordered_map<std::string, ImGuiTextureResource> m_textures_umap;
     ResourcePreviewManager m_resourcePreviewManager;
+    bool m_playerMode = false;
 
     void ApplyPendingDockTabSelections();
 };

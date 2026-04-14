@@ -13,6 +13,7 @@
 #include "gui/InxScreenUIRenderer.h"
 #include "vk/VkDeviceContext.h"
 #include "vk/VkPipelineManager.h"
+#include "vk/VkRenderUtils.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <core/error/InxError.h>
@@ -246,7 +247,6 @@ bool SceneRenderGraph::Initialize(InxVkCoreModular *vkCore, SceneRenderTarget *s
     // Initialize fullscreen effect renderer for FullscreenQuad passes
     m_fullscreenRenderer.Initialize(vkCore);
 
-    INXLOG_INFO("SceneRenderGraph initialized with full RenderGraph: ", m_width, "x", m_height);
     return true;
 }
 
@@ -274,7 +274,7 @@ VkDescriptorSet SceneRenderGraph::GetPerViewDescriptorSet() const
 }
 
 // ============================================================================
-// Resource Management (Phase 0)
+// Resource management
 // ============================================================================
 
 vk::ResourceHandle SceneRenderGraph::CreateTransientTexture(const std::string &name, uint32_t width, uint32_t height,
@@ -294,12 +294,8 @@ vk::ResourceHandle SceneRenderGraph::CreateTransientTexture(const std::string &n
     }
 
     // ========================================================================
-    // Bug 5 fix: allocate a real ResourceData entry in the underlying
-    // RenderGraph so that the returned handle can be resolved by
-    // ResolveTextureView().  The previous code fabricated an id with a
-    // base-1000 offset that had no backing ResourceData — any call to
-    // ResolveTextureView() with such a handle would access out-of-bounds
-    // memory.
+    // Allocate a real ResourceData entry in the underlying RenderGraph so
+    // the returned handle can be resolved by ResolveTextureView().
     // ========================================================================
     vk::ResourceHandle handle =
         m_renderGraph->RegisterTransientTexture(name, width, height, format, VK_SAMPLE_COUNT_1_BIT, isTransient);
@@ -314,7 +310,7 @@ vk::ResourceHandle SceneRenderGraph::CreateTransientTexture(const std::string &n
 }
 
 // ============================================================================
-// Phase 2: Python-Driven RenderGraph Topology
+// RenderGraph topology defined from Python
 // ============================================================================
 
 void SceneRenderGraph::ApplyPythonGraph(const RenderGraphDescription &desc)
@@ -329,12 +325,16 @@ void SceneRenderGraph::ApplyPythonGraph(const RenderGraphDescription &desc)
     }
 
     m_pythonCallbacks.clear();
+    m_hasShadowCasterPass = false;
 
     InxVkCoreModular *vkCore = m_vkCore;
 
     for (const auto &passDesc : desc.passes) {
         // Build the render callback directly from the pass action.
         const auto graphPassAction = passDesc.action;
+        if (graphPassAction == GraphPassActionType::DrawShadowCasters) {
+            m_hasShadowCasterPass = true;
+        }
         const int queueMin = passDesc.queueMin;
         const int queueMax = passDesc.queueMax;
         const std::string computeShaderName = passDesc.computeShaderName;
@@ -462,6 +462,8 @@ void SceneRenderGraph::EnsureGraphBuilt()
     if (m_hasPythonGraph && m_pythonGraphDesc.msaaSamples > 0) {
         auto currentMsaa = static_cast<int>(m_sceneTarget->GetMsaaSampleCount());
         if (m_pythonGraphDesc.msaaSamples != currentMsaa) {
+            INXLOG_DEBUG("SceneRenderGraph: MSAA mismatch (pipeline wants ", m_pythonGraphDesc.msaaSamples,
+                         "x, scene target has ", currentMsaa, "x) — skipping frame, waiting for resize");
             m_needsRebuild = true;
             // Prevent Execute() from running the stale compiled graph
             // whose render passes reference images with the old sample
@@ -487,7 +489,8 @@ void SceneRenderGraph::EnsureGraphBuilt()
 
     if (m_graphBuilt && m_needsCompile) {
         if (!m_renderGraph->Compile()) {
-            INXLOG_ERROR("SceneRenderGraph: Failed to compile render graph");
+            INXLOG_ERROR("SceneRenderGraph: Failed to compile render graph — disabling graph until next rebuild");
+            m_graphBuilt = false;
             return;
         }
         m_needsCompile = false;
@@ -543,20 +546,10 @@ void SceneRenderGraph::Execute(VkCommandBuffer commandBuffer)
         // COLOR_ATTACHMENT_OPTIMAL, so transition them back here before any
         // descriptor-based sampling occurs later in the frame.
         if (!m_sceneTarget->IsMsaaEnabled() && m_importedColorTarget.IsValid()) {
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = m_sceneTarget->GetColorImage();
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-            barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            VkImageMemoryBarrier barrier =
+                vkrender::MakeImageBarrier(m_sceneTarget->GetColorImage(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
@@ -693,29 +686,16 @@ void SceneRenderGraph::ResolveSceneMsaa(VkCommandBuffer commandBuffer)
     VkImage resolveImage = m_sceneTarget->GetColorImage();
 
     {
-        VkImageMemoryBarrier barriers[2]{};
-
-        // MSAA source
-        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barriers[0].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[0].image = msaaImage;
-        barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        barriers[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-        // 1x resolve destination
-        barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barriers[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[1].image = resolveImage;
-        barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        barriers[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        VkImageMemoryBarrier barriers[2] = {
+            // MSAA source
+            vkrender::MakeImageBarrier(msaaImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT),
+            // 1x resolve destination
+            vkrender::MakeImageBarrier(resolveImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                       VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT),
+        };
 
         vkCmdPipelineBarrier(commandBuffer,
                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -733,33 +713,96 @@ void SceneRenderGraph::ResolveSceneMsaa(VkCommandBuffer commandBuffer)
                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolveRegion);
 
     {
-        VkImageMemoryBarrier barriers[2]{};
-
-        // MSAA source: restore to COLOR_ATTACHMENT_OPTIMAL
-        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[0].image = msaaImage;
-        barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barriers[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        // 1x resolve destination: ready for outline / ImGui sampling
-        barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barriers[1].image = resolveImage;
-        barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkImageMemoryBarrier barriers[2] = {
+            // MSAA source: restore to COLOR_ATTACHMENT_OPTIMAL
+            vkrender::MakeImageBarrier(msaaImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                       VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+            // 1x resolve destination: ready for outline / ImGui sampling
+            vkrender::MakeImageBarrier(resolveImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+                                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT),
+        };
 
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
                              0, nullptr, 0, nullptr, 2, barriers);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BuildRenderGraph helpers
+// ---------------------------------------------------------------------------
+
+void SceneRenderGraph::RegisterTransientTextures(uint32_t width, uint32_t height,
+                                                 std::unordered_map<std::string, vk::ResourceHandle> &customRTHandles)
+{
+    // Non-backbuffer, non-depth color textures
+    for (const auto &tex : m_pythonGraphDesc.textures) {
+        if (!tex.isBackbuffer && !tex.isDepth) {
+            uint32_t texW = (tex.width > 0) ? tex.width : width;
+            uint32_t texH = (tex.height > 0) ? tex.height : height;
+            if (tex.sizeDivisor > 1) {
+                texW = std::max(1u, width / tex.sizeDivisor);
+                texH = std::max(1u, height / tex.sizeDivisor);
+            }
+            vk::ResourceHandle handle =
+                m_renderGraph->RegisterTransientTexture(tex.name, texW, texH, tex.format, VK_SAMPLE_COUNT_1_BIT, true);
+            customRTHandles[tex.name] = handle;
+        }
+    }
+
+    // Custom-size depth textures (shadow maps)
+    for (const auto &tex : m_pythonGraphDesc.textures) {
+        if (tex.isDepth && tex.width > 0 && tex.height > 0) {
+            vk::ResourceHandle handle = m_renderGraph->RegisterTransientTexture(
+                tex.name, tex.width, tex.height, tex.format, VK_SAMPLE_COUNT_1_BIT, true);
+            customRTHandles[tex.name] = handle;
+        }
+    }
+}
+
+void SceneRenderGraph::AppendAutoPass(const std::string &name, vk::ResourceHandle colorTarget,
+                                      vk::ResourceHandle depthTarget, uint32_t width, uint32_t height)
+{
+    auto callbackIt = m_pythonCallbacks.find(name);
+    if (callbackIt == m_pythonCallbacks.end())
+        return;
+
+    auto callback = callbackIt->second;
+    m_renderGraph->AddPass(name, [=](vk::PassBuilder &builder) {
+        builder.WriteColor(colorTarget, 0);
+        if (depthTarget.IsValid()) {
+            builder.ReadDepth(depthTarget);
+        }
+        builder.SetRenderArea(width, height);
+
+        return [callback, width, height](vk::RenderContext &ctx) {
+            if (callback) {
+                callback(ctx, width, height);
+            }
+        };
+    });
+}
+
+void SceneRenderGraph::FinalizeGraphOutput(const std::unordered_map<std::string, vk::ResourceHandle> &customRTHandles)
+{
+    bool outputSet = false;
+    if (m_hasPythonGraph && !m_pythonGraphDesc.outputTexture.empty()) {
+        auto texIt = std::find_if(m_pythonGraphDesc.textures.begin(), m_pythonGraphDesc.textures.end(),
+                                  [&](const GraphTextureDesc &t) { return t.name == m_pythonGraphDesc.outputTexture; });
+        if (texIt != m_pythonGraphDesc.textures.end()) {
+            if (!texIt->isBackbuffer && !texIt->isDepth) {
+                auto rtIt = customRTHandles.find(m_pythonGraphDesc.outputTexture);
+                if (rtIt != customRTHandles.end()) {
+                    m_renderGraph->SetOutput(rtIt->second);
+                    outputSet = true;
+                }
+            }
+        }
+    }
+    if (!outputSet && m_importedColorTarget.IsValid()) {
+        m_renderGraph->SetOutput(m_importedColorTarget);
     }
 }
 
@@ -823,74 +866,23 @@ void SceneRenderGraph::BuildRenderGraph()
         // passes can read them via builder.Read() for proper DAG edges.
         // =================================================================
 
-        // Pre-register transient textures for non-backbuffer, non-depth
-        // textures so their ResourceHandle is available before passes reference them.
-        for (const auto &tex : m_pythonGraphDesc.textures) {
-            if (!tex.isBackbuffer && !tex.isDepth) {
-                // Use custom size if specified, otherwise use scene target dimensions
-                uint32_t texW = (tex.width > 0) ? tex.width : width;
-                uint32_t texH = (tex.height > 0) ? tex.height : height;
-                // Apply sizeDivisor: divide scene dimensions when divisor > 1
-                if (tex.sizeDivisor > 1) {
-                    texW = std::max(1u, width / tex.sizeDivisor);
-                    texH = std::max(1u, height / tex.sizeDivisor);
-                }
-                vk::ResourceHandle handle = m_renderGraph->RegisterTransientTexture(tex.name, texW, texH, tex.format,
-                                                                                    VK_SAMPLE_COUNT_1_BIT, true);
-                customRTHandles[tex.name] = handle;
-            }
-        }
+        // Pre-register transient textures so their ResourceHandles are
+        // available before passes reference them.
+        RegisterTransientTextures(width, height, customRTHandles);
 
-        // Pre-register custom-size depth textures (shadow maps).
-        // These are depth textures with explicit dimensions — they need
-        // ResourceHandles registered upfront so later passes can reference
-        // them via inputBindings (e.g. shadow map bound as a sampled texture).
-        for (const auto &tex : m_pythonGraphDesc.textures) {
-            if (tex.isDepth && tex.width > 0 && tex.height > 0) {
-                vk::ResourceHandle handle = m_renderGraph->RegisterTransientTexture(
-                    tex.name, tex.width, tex.height, tex.format, VK_SAMPLE_COUNT_1_BIT, true);
-                customRTHandles[tex.name] = handle;
-            }
-        }
-
-        // Pre-scan: find the last SCENE pass (DrawRenderers / DrawSkybox) that
-        // writes to the MSAA backbuffer. Only scene passes get the subpass
-        // resolve.
-        std::string lastBackbufferPassName;
-        for (const auto &passDesc : sortedPasses) {
-            if (m_pythonCallbacks.count(passDesc.name) == 0) {
-                continue;
-            }
-            // Only scene passes (DrawRenderers, DrawSkybox) qualify for MSAA resolve
-            if (passDesc.action != GraphPassActionType::DrawRenderers &&
-                passDesc.action != GraphPassActionType::DrawSkybox) {
-                continue;
-            }
-            bool writesToBackbuffer = true;
-            // Check the primary (slot 0) color output
-            for (const auto &[slot, texName] : passDesc.writeColors) {
-                if (slot == 0 && !texName.empty()) {
-                    auto texIt = texDescMap.find(texName);
-                    if (texIt != texDescMap.end() && !texIt->second->isBackbuffer) {
-                        writesToBackbuffer = false;
-                    }
-                    break;
-                }
-            }
-            if (writesToBackbuffer) {
-                lastBackbufferPassName = passDesc.name;
-            }
-        }
-
-        // Track whether an MSAA→1x resolve transfer pass has been inserted this build.
-        // FullscreenQuad passes cannot sample the multisample backbuffer directly;
-        // the first FullscreenQuad that reads it triggers an automatic resolve.
-        bool msaaResolvedThisFrame = false;
+        // Track whether the multisampled backbuffer has been written since the
+        // last explicit resolve. FullscreenQuad passes that sample the backbuffer
+        // must resolve it again whenever a preceding pass wrote new MSAA data.
+        bool backbufferDirtySinceResolve = false;
+        uint32_t msaaResolvePassCounter = 0;
 
         for (const auto &passDesc : sortedPasses) {
             // Look up render callback from the Python callbacks map
             auto callbackIt = m_pythonCallbacks.find(passDesc.name);
             if (callbackIt == m_pythonCallbacks.end()) {
+                INXLOG_WARN("SceneRenderGraph: Pass '", passDesc.name,
+                            "' has no render callback — skipping. "
+                            "This usually means ApplyPythonGraph() was not called or validation failed.");
                 continue;
             }
             auto callback = callbackIt->second;
@@ -923,6 +915,8 @@ void SceneRenderGraph::BuildRenderGraph()
             }
             // Primary color target (slot 0) — used for MSAA resolve and compute fallback
             vk::ResourceHandle primaryColorTarget = colorTargets.count(0) ? colorTargets[0] : m_importedColorTarget;
+            const bool writesBackbuffer = primaryColorTarget.IsValid() && m_importedColorTarget.IsValid() &&
+                                          primaryColorTarget.id == m_importedColorTarget.id;
 
             // Collect non-depth read texture handles for builder.Read()
             // This creates proper DAG edges and Vulkan barriers for
@@ -1011,9 +1005,9 @@ void SceneRenderGraph::BuildRenderGraph()
                     clearDepth = false;
                     break;
                 }
-                // Record the pass name for per-frame clear-value updates
-                // (Bug 3 / Bug 7 fix — Execute() uses this to call
-                // UpdatePassClearColor() without rebuilding the graph).
+                // Record the pass name for per-frame clear-value updates.
+                // Execute() uses this to update clear values without
+                // rebuilding the graph.
                 m_mainClearPassName = passDesc.name;
                 // Only override the first eligible pass
                 m_hasCameraClearOverride = false;
@@ -1083,8 +1077,7 @@ void SceneRenderGraph::BuildRenderGraph()
             if (passDesc.action == GraphPassActionType::FullscreenQuad) {
 
                 // ------ MSAA auto-resolve for backbuffer reads ------
-                if (!msaaResolvedThisFrame && msaaSamples > VK_SAMPLE_COUNT_1_BIT &&
-                    m_importedResolveTarget.IsValid()) {
+                if (msaaSamples > VK_SAMPLE_COUNT_1_BIT && m_importedResolveTarget.IsValid()) {
                     bool readsBackbuffer = false;
                     for (const auto &readTex : passDesc.readTextures) {
                         auto texIt = texDescMap.find(readTex);
@@ -1093,7 +1086,7 @@ void SceneRenderGraph::BuildRenderGraph()
                             break;
                         }
                     }
-                    if (readsBackbuffer) {
+                    if (readsBackbuffer && backbufferDirtySinceResolve) {
                         // Insert a transfer pass that resolves MSAA → 1x.
                         // The render graph handles layout transitions via
                         // TransferRead / TransferWrite declarations.
@@ -1103,26 +1096,28 @@ void SceneRenderGraph::BuildRenderGraph()
                         VkImage resolveImage = m_sceneTarget->GetColorImage();
                         uint32_t resolveW = width;
                         uint32_t resolveH = height;
+                        std::string resolvePassName =
+                            "__MSAA_resolve_pre_fs_" + std::to_string(msaaResolvePassCounter++);
 
-                        m_renderGraph->AddTransferPass(
-                            "__MSAA_resolve_pre_fs", [importedColor, importedResolve, resolveW, resolveH, msaaImage,
-                                                      resolveImage](vk::PassBuilder &builder) {
-                                builder.TransferRead(importedColor);
-                                builder.TransferWrite(importedResolve);
-                                builder.SetRenderArea(resolveW, resolveH);
+                        m_renderGraph->AddTransferPass(resolvePassName, [importedColor, importedResolve, resolveW,
+                                                                         resolveH, msaaImage,
+                                                                         resolveImage](vk::PassBuilder &builder) {
+                            builder.TransferRead(importedColor);
+                            builder.TransferWrite(importedResolve);
+                            builder.SetRenderArea(resolveW, resolveH);
 
-                                return [msaaImage, resolveImage, resolveW, resolveH](vk::RenderContext &ctx) {
-                                    VkImageResolve region{};
-                                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                                    region.extent = {resolveW, resolveH, 1};
+                            return [msaaImage, resolveImage, resolveW, resolveH](vk::RenderContext &ctx) {
+                                VkImageResolve region{};
+                                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                                region.extent = {resolveW, resolveH, 1};
 
-                                    vkCmdResolveImage(ctx.GetCommandBuffer(), msaaImage,
-                                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resolveImage,
-                                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-                                };
-                            });
-                        msaaResolvedThisFrame = true;
+                                vkCmdResolveImage(ctx.GetCommandBuffer(), msaaImage,
+                                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resolveImage,
+                                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                            };
+                        });
+                        backbufferDirtySinceResolve = false;
                     }
                 }
 
@@ -1311,6 +1306,10 @@ void SceneRenderGraph::BuildRenderGraph()
                                          packedPushConstantSize);
                     };
                 });
+
+                if (writesBackbuffer) {
+                    backbufferDirtySinceResolve = true;
+                }
                 continue;
             }
 
@@ -1458,118 +1457,30 @@ void SceneRenderGraph::BuildRenderGraph()
                     }
                 }
             }
-        }
 
-        // ====================================================================
-        // Auto-append _ComponentGizmos pass: draws queue 30000-32000
-        // (Python-defined per-component gizmos) with depth testing against
-        // existing scene geometry. Runs before editor gizmos.
-        // ====================================================================
-        {
-            auto compGizmoCallbackIt = m_pythonCallbacks.find("_ComponentGizmos");
-            if (compGizmoCallbackIt != m_pythonCallbacks.end()) {
-                auto compGizmoCallback = compGizmoCallbackIt->second;
-                vk::ResourceHandle compGizmoColorTarget = m_importedColorTarget;
-                vk::ResourceHandle compGizmoDepthTarget = sharedDepth;
-
-                m_renderGraph->AddPass("_ComponentGizmos", [=](vk::PassBuilder &builder) {
-                    builder.WriteColor(compGizmoColorTarget, 0);
-                    if (compGizmoDepthTarget.IsValid()) {
-                        builder.ReadDepth(compGizmoDepthTarget);
-                    }
-                    builder.SetRenderArea(width, height);
-
-                    return [compGizmoCallback, width, height](vk::RenderContext &ctx) {
-                        if (compGizmoCallback) {
-                            compGizmoCallback(ctx, width, height);
-                        }
-                    };
-                });
+            if (writesBackbuffer) {
+                backbufferDirtySinceResolve = true;
             }
         }
 
         // ====================================================================
-        // Auto-append _EditorGizmos pass: draws queue 32001-32500 (grid +
-        // gizmos) into the MSAA backbuffer with depth testing against
-        // existing scene geometry. No clear — additive over previous passes.
-        // In game view no draw calls fall in this range, so the pass is a no-op.
+        // Auto-append system passes: component gizmos, editor gizmos,
+        // and editor tools — all draw into the backbuffer with depth testing.
         // ====================================================================
-        {
-            auto gizmoCallbackIt = m_pythonCallbacks.find("_EditorGizmos");
-            if (gizmoCallbackIt != m_pythonCallbacks.end()) {
-                auto gizmoCallback = gizmoCallbackIt->second;
-                vk::ResourceHandle gizmoColorTarget = m_importedColorTarget;
-                vk::ResourceHandle gizmoDepthTarget = sharedDepth;
-
-                m_renderGraph->AddPass("_EditorGizmos", [=](vk::PassBuilder &builder) {
-                    builder.WriteColor(gizmoColorTarget, 0);
-                    if (gizmoDepthTarget.IsValid()) {
-                        builder.ReadDepth(gizmoDepthTarget);
-                    }
-                    builder.SetRenderArea(width, height);
-
-                    return [gizmoCallback, width, height](vk::RenderContext &ctx) {
-                        if (gizmoCallback) {
-                            gizmoCallback(ctx, width, height);
-                        }
-                    };
-                });
-            }
-        }
-
-        // ====================================================================
-        // Auto-append _EditorTools pass: draws queue 32501-32700
-        // (translate/rotate/scale handles) into the MSAA backbuffer.
-        // Depth is read-only (not used for testing, but required for
-        // VkRenderPass compatibility with pipelines compiled against
-        // m_internalRenderPass which always has a depth attachment).
-        // ====================================================================
-        {
-            auto toolsCallbackIt = m_pythonCallbacks.find("_EditorTools");
-            if (toolsCallbackIt != m_pythonCallbacks.end()) {
-                auto toolsCallback = toolsCallbackIt->second;
-                vk::ResourceHandle toolsColorTarget = m_importedColorTarget;
-                vk::ResourceHandle toolsDepthTarget = sharedDepth;
-
-                m_renderGraph->AddPass("_EditorTools", [=](vk::PassBuilder &builder) {
-                    builder.WriteColor(toolsColorTarget, 0);
-                    if (toolsDepthTarget.IsValid()) {
-                        builder.ReadDepth(toolsDepthTarget);
-                    }
-                    builder.SetRenderArea(width, height);
-
-                    return [toolsCallback, width, height](vk::RenderContext &ctx) {
-                        if (toolsCallback) {
-                            toolsCallback(ctx, width, height);
-                        }
-                    };
-                });
-            }
-        }
+        AppendAutoPass("_ComponentGizmos", m_importedColorTarget, sharedDepth, width, height);
+        AppendAutoPass("_EditorGizmos", m_importedColorTarget, sharedDepth, width, height);
+        AppendAutoPass("_EditorTools", m_importedColorTarget, sharedDepth, width, height);
     }
 
     // Set output for proper resource tracking and dead-pass culling.
-    // If the Python graph output references the resolved backbuffer, use
-    // m_importedResolveTarget so the culling algorithm traces through
-    // the MSAA resolve and keeps all scene passes alive.
-    bool outputSet = false;
-    if (m_hasPythonGraph && !m_pythonGraphDesc.outputTexture.empty()) {
-        auto texIt = std::find_if(m_pythonGraphDesc.textures.begin(), m_pythonGraphDesc.textures.end(),
-                                  [&](const GraphTextureDesc &t) { return t.name == m_pythonGraphDesc.outputTexture; });
-        if (texIt != m_pythonGraphDesc.textures.end()) {
-            if (!texIt->isBackbuffer && !texIt->isDepth) {
-                // Custom RT output — look up its handle
-                auto rtIt = customRTHandles.find(m_pythonGraphDesc.outputTexture);
-                if (rtIt != customRTHandles.end()) {
-                    m_renderGraph->SetOutput(rtIt->second);
-                    outputSet = true;
-                }
-            }
-        }
-    }
-    if (!outputSet && m_importedColorTarget.IsValid()) {
-        m_renderGraph->SetOutput(m_importedColorTarget);
-    }
+    FinalizeGraphOutput(customRTHandles);
+
+    // Debug: Log the passes added to the render graph
+    INXLOG_DEBUG("SceneRenderGraph::BuildRenderGraph - Built ", m_renderGraph->GetPassCount(), " passes from ",
+                 m_pythonGraphDesc.passes.size(),
+                 " Python passes + editor auto-appended passes. "
+                 "Output: ",
+                 m_pythonGraphDesc.outputTexture.empty() ? "(backbuffer)" : m_pythonGraphDesc.outputTexture);
 
     m_graphBuilt = true;
 }

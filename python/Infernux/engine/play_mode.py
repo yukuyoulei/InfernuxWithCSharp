@@ -45,8 +45,10 @@ def _get_scene_manager():
     from Infernux.lib import SceneManager
     return SceneManager.instance()
 
+from ._play_mode_serialization import PlayModeSerializationMixin
 
-class PlayModeManager:
+
+class PlayModeManager(PlayModeSerializationMixin):
     """
     Manages the runtime/editor play mode.
     
@@ -101,6 +103,9 @@ class PlayModeManager:
         # Asset database for GUID-based script lookup
         self._asset_database = None
         self._runtime_hidden_object_ids: set[int] = set()
+
+        # C++ engine handle for renderer-level play mode signalling
+        self._native_engine = None
     
     @classmethod
     def instance(cls) -> Optional['PlayModeManager']:
@@ -123,7 +128,8 @@ class PlayModeManager:
             return
         try:
             object_id = int(game_object.id)
-        except Exception:
+        except Exception as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             return
         if object_id > 0:
             self._runtime_hidden_object_ids.add(object_id)
@@ -134,7 +140,8 @@ class PlayModeManager:
     def is_runtime_hidden_object_id(self, object_id: int) -> bool:
         try:
             return int(object_id) in self._runtime_hidden_object_ids
-        except Exception:
+        except Exception as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             return False
     
     # ========================================================================
@@ -179,7 +186,8 @@ class PlayModeManager:
         try:
             from Infernux.timing import Time
             Time._time_scale = self._time_scale
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass  # Time module not available yet during early init
         except Exception as exc:
             Debug.log_warning(f"Failed to sync time_scale to Time class: {exc}")
@@ -204,14 +212,6 @@ class PlayModeManager:
         if self._state != PlayModeState.EDIT:
             Debug.log_warning("Cannot enter play mode: not in edit mode")
             return False
-
-        try:
-            from Infernux.engine.resources_manager import ResourcesManager
-            rm = ResourcesManager.instance()
-            if rm is not None:
-                rm.process_pending_reloads()
-        except Exception as exc:
-            Debug.log_warning(f"Failed to flush pending script reloads before Play Mode: {exc}")
 
         # Block play mode while editing a prefab
         from Infernux.engine.scene_manager import SceneFileManager
@@ -270,61 +270,6 @@ class PlayModeManager:
         
         Debug.log_internal("▶ Entering Play Mode...")
 
-        csharp_script_components = []
-        unsupported_external_components = []
-        for comps in InxComponent._active_instances.values():
-            for comp in comps:
-                language = getattr(comp.__class__, "_external_script_language_", "")
-                if not language:
-                    continue
-                normalized = str(language).strip().lower()
-                if normalized == "csharp":
-                    csharp_script_components.append(comp)
-                else:
-                    unsupported_external_components.append((comp, normalized))
-        if unsupported_external_components:
-            for comp, language in unsupported_external_components:
-                owner = getattr(comp, "game_object", None)
-                owner_name = getattr(owner, "name", "<Missing GameObject>")
-                Debug.log_error(
-                    f"Play Mode blocked by {language} script component '{comp.type_name}' on '{owner_name}'. "
-                    "Runtime execution for external script components is not implemented yet.",
-                    context=owner if owner is not None else comp,
-                )
-            Debug.log_error(
-                f"Play Mode blocked: {len(unsupported_external_components)} external script component(s) are attached. "
-                "Only the native C# runtime path is currently wired up."
-            )
-            return False
-        if csharp_script_components:
-            runtime_available = False
-            runtime_error = ""
-            try:
-                from Infernux.lib import (
-                    get_managed_runtime_error,
-                    is_managed_runtime_available,
-                )
-                runtime_available = bool(is_managed_runtime_available())
-                runtime_error = get_managed_runtime_error() or ""
-            except Exception as exc:
-                runtime_error = str(exc)
-
-            if not runtime_available:
-                for comp in csharp_script_components:
-                    owner = getattr(comp, "game_object", None)
-                    owner_name = getattr(owner, "name", "<Missing GameObject>")
-                    suffix = f" ({runtime_error})" if runtime_error else ""
-                    Debug.log_error(
-                        f"Play Mode blocked by C# script component '{comp.type_name}' on '{owner_name}'. "
-                        f"Native CLR host is unavailable{suffix}",
-                        context=owner if owner is not None else comp,
-                    )
-                Debug.log_error(
-                    f"Play Mode blocked: {len(csharp_script_components)} C# component(s) are attached, "
-                    "but the native CLR host is not ready."
-                )
-                return False
-
         from Infernux.engine.deferred_task import DeferredTaskRunner
         runner = DeferredTaskRunner.instance()
         if runner.is_busy:
@@ -332,8 +277,9 @@ class PlayModeManager:
             return False
 
         # ── Step functions (closures capture self) ───────────────────
-        def step_save():
-            """Serialize scene + clear undo + init timing."""
+        def step_enter():
+            """Save scene, rebuild from snapshot, and activate play — all in one frame."""
+            # 1. Serialize scene + clear undo + init timing
             self._save_scene_state()
             from Infernux.engine.undo import UndoManager
             _undo = UndoManager.instance()
@@ -345,38 +291,43 @@ class PlayModeManager:
             try:
                 from Infernux.timing import Time
                 Time._reset()
-            except (ImportError, Exception):
+            except (ImportError, Exception) as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
                 pass
             from Infernux.components.builtin_component import BuiltinComponent
             BuiltinComponent._clear_cache()
 
-        def step_rebuild():
-            """Rebuild scene from snapshot."""
-            if not self._rebuild_active_scene(
-                self._scene_backup,
-                for_play=True,
-                reload_managed_runtime=bool(csharp_script_components),
-            ):
+            # 2. Transition state early so that "clear on play" fires
+            #    BEFORE Python components are restored (which triggers
+            #    Awake → OnEnable and may produce user-visible logs).
+            old_state = self._state
+            self._state = PlayModeState.PLAYING
+            try:
+                from Infernux.core.material import Material
+                Material._suppress_auto_save = True
+            except ImportError as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                pass
+            self._notify_state_change(old_state, self._state)
+
+            # 3. Rebuild scene from snapshot (Python component restore will
+            #    trigger Awake/OnEnable — their logs now survive the clear).
+            if not self._rebuild_active_scene(self._scene_backup, for_play=True):
                 Debug.log_error("Failed to rebuild runtime scene for Play Mode")
                 self._state = PlayModeState.EDIT
+                try:
+                    from Infernux.core.material import Material
+                    Material._suppress_auto_save = False
+                except ImportError:
+                    pass
                 try:
                     self._rebuild_active_scene(self._scene_backup, for_play=False, restore_scene_path=True)
                 except Exception as exc:
                     Debug.log_error(f"Failed to restore scene after play-mode build failure: {exc}")
-                self._notify_state_change(PlayModeState.EDIT, PlayModeState.EDIT)
+                self._notify_state_change(PlayModeState.PLAYING, PlayModeState.EDIT)
                 return False
 
-        def step_activate():
-            """Transition state and enter C++ play mode."""
-            old_state = self._state
-            self._state = PlayModeState.PLAYING
-            # Suppress material auto-save: runtime changes are transient.
-            try:
-                from Infernux.core.material import Material
-                Material._suppress_auto_save = True
-            except ImportError:
-                pass
-            self._notify_state_change(old_state, self._state)
+            # 4. Enter C++ play mode (Scene::Start drives remaining lifecycle)
             scene_manager = self._get_scene_manager()
             if scene_manager:
                 scene_manager.play()
@@ -385,14 +336,12 @@ class PlayModeManager:
         def on_done(ok):
             from Infernux.engine.ui.engine_status import EngineStatus
             if ok:
-                EngineStatus.flash("已启动 Playing ▶", 1.0, duration=1.5)
+                EngineStatus.flash("已启动 Playing", 1.0, duration=1.5)
             else:
                 EngineStatus.flash("启动失败 Play Failed", 0.0, duration=2.0)
 
         runner.submit("Enter Play Mode", [
-            ("保存场景 Saving scene...",   0.15, step_save),
-            ("重建场景 Rebuilding scene...", 0.5,  step_rebuild),
-            ("启动游戏 Activating play...",  0.85, step_activate),
+            ("启动运行模式 Entering play mode...", 0.5, step_enter),
         ], on_done=on_done)
         return True
     
@@ -438,7 +387,8 @@ class PlayModeManager:
         try:
             from Infernux.core.material import Material
             Material._suppress_auto_save = False
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
 
         # 3. Discard any pending runtime scene load queued by user scripts
@@ -446,16 +396,18 @@ class PlayModeManager:
         try:
             from Infernux.scene import SceneManager as _SceneMgr
             _SceneMgr._pending_scene_load = None
-        except Exception:
+        except Exception as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
 
         from Infernux.components.builtin_component import BuiltinComponent
         BuiltinComponent._clear_cache()
 
-        # ── Deferred steps (one per frame for responsiveness) ────────
+        # ── Deferred step (single frame to avoid flicker) ─────────
 
-        def step_restore_scene():
-            """Deserialize backup snapshot and recreate Python components."""
+        def step_exit():
+            """Restore scene from backup and finalize — all in one frame."""
+            # 1. Deserialize backup snapshot and recreate Python components
             restore_ok = self._rebuild_active_scene(
                 self._scene_backup, for_play=False, restore_scene_path=True
             )
@@ -465,8 +417,7 @@ class PlayModeManager:
                     "— editor may be in a degraded state"
                 )
 
-        def step_finalize():
-            """Clear undo and notify listeners."""
+            # 2. Clear undo and notify listeners
             from Infernux.engine.undo import UndoManager
             _undo = UndoManager.instance()
             if _undo:
@@ -481,7 +432,6 @@ class PlayModeManager:
                     else:
                         sfm.clear_dirty()
             self._notify_state_change(old_state, PlayModeState.EDIT)
-            Debug.log_internal("[OK] Returned to Edit Mode (scene restored)")
 
         def on_done(ok):
             from Infernux.engine.ui.engine_status import EngineStatus
@@ -496,8 +446,7 @@ class PlayModeManager:
                     Debug.log_error(f"exit_play_mode on_complete callback failed: {exc}")
 
         runner.submit("Exit Play Mode", [
-            ("恢复场景 Restoring scene...", 0.3, step_restore_scene),
-            ("完成恢复 Finalizing...",      0.8, step_finalize),
+            ("恢复编辑模式 Restoring edit mode...", 0.5, step_exit),
         ], on_done=on_done)
         return True
     
@@ -612,6 +561,13 @@ class PlayModeManager:
             # Read back computed values so PlayModeManager stays in sync
             self._delta_time = Time.delta_time
             self._total_play_time = Time.time
+            # Read game-only frame cost from C++ (previous frame's measurement)
+            if self._native_engine is not None:
+                try:
+                    Time._game_delta_time = self._native_engine.get_game_only_frame_ms() / 1000.0
+                except Exception as _exc:
+                    Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                    pass
         except ImportError:
             self._delta_time = min(raw_dt * self._time_scale, 0.1)
             self._total_play_time += self._delta_time
@@ -628,7 +584,6 @@ class PlayModeManager:
         *,
         for_play: bool,
         restore_scene_path: bool = False,
-        reload_managed_runtime: bool = False,
     ) -> bool:
         """Deserialize *snapshot* into the active scene and recreate Python components.
 
@@ -670,23 +625,6 @@ class PlayModeManager:
         InxComponent._clear_all_instances()
         BuiltinComponent._clear_cache()
 
-        if reload_managed_runtime:
-            try:
-                from Infernux.lib import (
-                    get_managed_runtime_error,
-                    reload_managed_runtime_if_changed,
-                )
-
-                if not reload_managed_runtime_if_changed():
-                    runtime_error = get_managed_runtime_error() or "unknown managed runtime reload error"
-                    Debug.log_error(
-                        f"Failed to switch Play Mode to the latest compiled C# assembly: {runtime_error}"
-                    )
-                    return False
-            except Exception as exc:
-                Debug.log_error(f"Failed to refresh managed runtime before Play Mode: {exc}")
-                return False
-
         # When entering play mode, mark the scene as playing BEFORE restoring
         # Python components so newly attached PyComponentProxy instances use the
         # runtime lifecycle path instead of edit-mode lifecycle.
@@ -703,63 +641,6 @@ class PlayModeManager:
     # ========================================================================
     # Python component helpers (serialization / reload)
     # ========================================================================
-
-    def _serialize_py_component(self, component: 'InxComponent') -> Dict[str, Any]:
-        """Serialize Python component fields and metadata.
-
-        Uses the component's ``_serialize_value`` so that ref wrappers
-        (GameObjectRef, MaterialRef) are converted to JSON-safe dicts.
-        """
-        from Infernux.components.serialized_field import get_serialized_fields
-
-        from Infernux.components.serialized_field import get_raw_field_value
-        fields = get_serialized_fields(component.__class__)
-        data = {}
-        for name, meta in fields.items():
-            raw = get_raw_field_value(component, name)
-            data[name] = component._serialize_value(raw)
-
-        script_guid = getattr(component, "_script_guid", None)
-
-        return {
-            "type_name": getattr(component, "type_name", component.__class__.__name__),
-            "script_guid": script_guid,
-            "enabled": getattr(component, "enabled", True),
-            "fields": data,
-        }
-
-    def _apply_py_component_state(self, component: 'InxComponent', state: Dict[str, Any]):
-        """Apply serialized field values to a Python component instance.
-
-        Uses ``_deserialize_value`` so that JSON dicts produced by
-        ``_serialize_py_component`` are correctly reconstructed into
-        GameObjectRef / MaterialRef / enum values.
-        """
-        if not state or component is None:
-            return
-        component.enabled = bool(state.get("enabled", True))
-
-        fields = state.get("fields", {})
-        
-        # Get the new class's serialized fields - only restore fields that still exist
-        from Infernux.components.serialized_field import get_serialized_fields
-        new_serialized_fields = get_serialized_fields(component.__class__)
-
-        previous_deserializing = getattr(component, '_inf_deserializing', False)
-        component._inf_deserializing = True
-        try:
-            for name, value in fields.items():
-                # Only restore if the field still exists in the new class definition
-                if name not in new_serialized_fields:
-                    continue
-                meta = new_serialized_fields[name]
-                value = component._deserialize_value(value, meta)
-                setattr(component, name, value)
-        finally:
-            component._inf_deserializing = previous_deserializing
-
-        if state.get("script_guid"):
-            component._script_guid = state.get("script_guid")
 
     def reload_components_from_script(self, file_path: str):
         """
@@ -838,6 +719,10 @@ class PlayModeManager:
             target_type_name = state.get("type_name") or getattr(old_comp, "type_name", type(old_comp).__name__)
             component_class = reloaded_by_name.get(target_type_name)
 
+            # Class was likely renamed — if exactly one subclass exists, use it.
+            if component_class is None and len(reloaded_classes) == 1:
+                component_class = reloaded_classes[0]
+
             if component_class is None:
                 Debug.log_error(
                     f"Failed to reload component '{target_type_name}' from {os.path.basename(script_path_abs)}: "
@@ -874,7 +759,8 @@ class PlayModeManager:
             try:
                 from Infernux.engine.undo import _bump_inspector_structure
                 _bump_inspector_structure()
-            except Exception:
+            except Exception as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
                 pass
             Debug.log_internal(f"Reloaded {reloaded_count} component(s) from {os.path.basename(script_path_abs)}")
 
@@ -885,144 +771,6 @@ class PlayModeManager:
     # ========================================================================
     # Python Component Restoration (after C++ scene deserialize)
     # ========================================================================
-
-    def _restore_pending_py_components(self):
-        """
-        Restore Python components after scene has been deserialized.
-        
-        C++ Scene::Deserialize() stores pending Python component info,
-        which we retrieve and use to recreate the actual Python instances.
-
-        Delegates to the shared :func:`component_restore.restore_pending_py_components`
-        with ``batch_on_after_deserialize=True`` so all components are attached
-        before any ``on_after_deserialize`` callback fires.
-        """
-        scene_manager = self._get_scene_manager()
-        if not scene_manager:
-            return
-        scene = scene_manager.get_active_scene()
-        if not scene:
-            return
-
-        from Infernux.engine.component_restore import restore_pending_py_components
-        restore_pending_py_components(
-            scene,
-            asset_database=self._asset_database,
-            pre_warm_renderstack=True,
-            batch_on_after_deserialize=True,
-        )
-
-    def _materialize_prefab_references_for_play(self):
-        """Instantiate prefab-backed GameObject refs before runtime lifecycle begins."""
-        from Infernux.components.component import InxComponent
-
-        self.clear_runtime_hidden_object_ids()
-        total_materialized = 0
-        max_passes = 32
-        for _ in range(max_passes):
-            pass_materialized = 0
-            active_components = []
-            for components in list(InxComponent._active_instances.values()):
-                for component in list(components):
-                    if component is None or getattr(component, "_is_destroyed", False):
-                        continue
-                    active_components.append(component)
-
-            if not active_components:
-                break
-
-            for component in active_components:
-                pass_materialized += self._materialize_prefab_refs_on_owner(component)
-
-            total_materialized += pass_materialized
-            if pass_materialized == 0:
-                break
-        else:
-            Debug.log_warning(
-                "Stopped prefab GameObject materialization after 32 passes. "
-                "Check for recursive prefab references."
-            )
-
-        if total_materialized > 0:
-            Debug.log_internal(
-                f"Materialized {total_materialized} prefab GameObject reference(s) for Play Mode"
-            )
-
-    def _materialize_prefab_refs_on_owner(self, owner) -> int:
-        from Infernux.components.component import InxComponent
-        from Infernux.components.serialized_field import get_serialized_fields, get_raw_field_value
-
-        fields = get_serialized_fields(owner.__class__)
-        if not fields:
-            return 0
-
-        materialized = 0
-        is_component = isinstance(owner, InxComponent)
-        previous_deserializing = getattr(owner, "_inf_deserializing", False) if is_component else False
-        if is_component:
-            owner._inf_deserializing = True
-        try:
-            for name, meta in fields.items():
-                raw_value = get_raw_field_value(owner, name)
-                new_value, changed = self._materialize_prefab_refs_in_value(raw_value, meta)
-                if changed:
-                    setattr(owner, name, new_value)
-                    materialized += changed
-        finally:
-            if is_component:
-                owner._inf_deserializing = previous_deserializing
-
-        return materialized
-
-    def _materialize_prefab_refs_in_value(self, value, field_meta_or_type):
-        from Infernux.components.ref_wrappers import PrefabRef
-        from Infernux.components.serializable_object import SerializableObject
-        from Infernux.components.serialized_field import FieldType
-
-        if hasattr(field_meta_or_type, "field_type"):
-            field_type = field_meta_or_type.field_type
-            element_type = getattr(field_meta_or_type, "element_type", None)
-        else:
-            field_type = field_meta_or_type
-            element_type = None
-
-        if field_type == FieldType.GAME_OBJECT:
-            if isinstance(value, PrefabRef):
-                instance = value.instantiate()
-                if instance is not None:
-                    self.register_runtime_hidden_object(instance)
-                    return instance, 1
-            return value, 0
-
-        if field_type == FieldType.SERIALIZABLE_OBJECT:
-            if isinstance(value, SerializableObject):
-                return value, self._materialize_prefab_refs_on_owner(value)
-            return value, 0
-
-        if field_type == FieldType.LIST and isinstance(value, list):
-            if element_type == FieldType.GAME_OBJECT:
-                materialized = 0
-                new_items = []
-                for item in value:
-                    if isinstance(item, PrefabRef):
-                        instance = item.instantiate()
-                        if instance is not None:
-                            self.register_runtime_hidden_object(instance)
-                            new_items.append(instance)
-                            materialized += 1
-                            continue
-                    new_items.append(item)
-                return (new_items if materialized else value), materialized
-
-            if element_type == FieldType.SERIALIZABLE_OBJECT:
-                materialized = 0
-                for item in value:
-                    if isinstance(item, SerializableObject):
-                        materialized += self._materialize_prefab_refs_on_owner(item)
-                return value, materialized
-
-        return value, 0
-
 
     # ========================================================================
     # Scene State Management  
@@ -1093,6 +841,16 @@ class PlayModeManager:
     
     def _notify_state_change(self, old_state: PlayModeState, new_state: PlayModeState):
         """Notify all listeners of state change."""
+        # Tell the C++ renderer whether we're in play mode so it can
+        # bypass the editor FPS cap and idle sleep.
+        is_playing = new_state != PlayModeState.EDIT
+        if self._native_engine is not None:
+            try:
+                self._native_engine.set_play_mode_rendering(is_playing)
+            except Exception as _exc:
+                Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
+                pass
+
         event = PlayModeEvent(
             old_state=old_state,
             new_state=new_state,

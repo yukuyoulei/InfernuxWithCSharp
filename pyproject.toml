@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Infernux"
-version = "0.1.1"
+version = "0.1.3"
 description = "Open-source game engine with a C++17 / Vulkan runtime and a Python layer for gameplay, tools, and render authoring."
 authors = [{name = "Lizhe Chen", email = "chenlizheme@outlook.com"}]
 readme = "README.md"
@@ -15,6 +15,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -22,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.21.0",
+    "numba>=0.61.0",
     "watchdog>=1.0.0",
     "Pillow>=10.4.0",
     "imageio>=2.34.0",
@@ -38,9 +40,9 @@ Issues = "https://github.com/ChenlizheMe/Infernux/issues"
 launcher = ["PySide6>=6.5.0"]
 
 [tool.setuptools]
-packages = {find = {where = ["python"], exclude = ["*.__pycache__", "*.__pycache__.*"]}}
+packages = {find = {where = ["python"], exclude = ["test", "test.*", "*.test", "*.test.*", "*.tests", "*.tests.*", "*.__pycache__", "*.__pycache__.*"]}}
 package-dir = {"" = "python"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-Infernux = ["py.typed", "*.pyi", "**/*.pyi", "*.dll", "*.pyd", "resources/icons/*.png", "resources/icons/components/*.png", "resources/fonts/*.otf", "resources/fonts/*.ttf", "resources/pictures/*.png"]
+Infernux = ["py.typed", "*.pyi", "**/*.pyi", "*.dll", "*.pyd", "*.so", "*.dylib", "resources/icons/*.png", "resources/icons/components/*.png", "resources/fonts/*.otf", "resources/fonts/*.ttf", "resources/pictures/*.png", "resources/supports/*.txt"]

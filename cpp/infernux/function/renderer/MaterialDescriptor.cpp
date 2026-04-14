@@ -256,8 +256,6 @@ void MaterialDescriptorManager::Initialize(VmaAllocator allocator, VkDevice devi
     if (CreateDescriptorPool(maxMaterials) == VK_NULL_HANDLE) {
         INXLOG_ERROR("Failed to create material descriptor pool");
     }
-
-    INXLOG_INFO("MaterialDescriptorManager initialized with capacity for ", maxMaterials, " materials");
 }
 
 void MaterialDescriptorManager::Shutdown()
@@ -275,8 +273,6 @@ void MaterialDescriptorManager::Shutdown()
 
     m_device = VK_NULL_HANDLE;
     m_physicalDevice = VK_NULL_HANDLE;
-
-    INXLOG_INFO("MaterialDescriptorManager shutdown");
 }
 
 VkDescriptorPool MaterialDescriptorManager::CreateDescriptorPool(uint32_t maxMaterials)
@@ -716,6 +712,11 @@ void MaterialDescriptorManager::ResolveTextureProperties(const std::string &mate
     }
 
     if (!writes.empty()) {
+        // Material descriptor sets are shared across all frames-in-flight
+        // (not double-buffered).  Wait for all previously submitted command
+        // buffers to finish before writing image/sampler descriptors so we
+        // don't stomp a binding the GPU is still sampling.
+        vkDeviceWaitIdle(m_device);
         vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 }
@@ -742,6 +743,8 @@ void MaterialDescriptorManager::BindTexture(const std::string &materialName, uin
         write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         write.pImageInfo = &imageInfo;
 
+        // Shared descriptor set — wait for all in-flight usage before writing.
+        vkDeviceWaitIdle(m_device);
         vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
     }
 }

@@ -77,7 +77,7 @@ struct ScenePassConfig
     std::vector<std::string> inputPasses;
 
     // ========================================================================
-    // Phase 0: Resource and Subpass Support (NEW)
+    // Resource and subpass support
     // ========================================================================
 
     // Resource declarations (if empty, uses default scene target)
@@ -130,11 +130,11 @@ class SceneRenderGraph
     void Destroy();
 
     // ========================================================================
-    // Phase 2: Python-Driven RenderGraph Topology
+    // RenderGraph topology defined from Python
     // ========================================================================
 
     /**
-     * @brief Apply a Python-defined render graph topology
+     * @brief Apply a render graph topology defined from Python
      *
      * Receives a RenderGraphDescription from Python and translates it into
      * SceneRenderGraph passes with appropriate callbacks. C++ retains
@@ -156,7 +156,7 @@ class SceneRenderGraph
     }
 
     /**
-     * @brief Check if a Python graph topology has been applied
+     * @brief Check if a custom graph topology has been applied
      */
     [[nodiscard]] bool HasPythonGraph() const
     {
@@ -164,7 +164,7 @@ class SceneRenderGraph
     }
 
     /**
-     * @brief Get the MSAA sample count requested by the current Python graph (0 = no preference).
+     * @brief Get the MSAA sample count requested by the current graph (0 = no preference).
      */
     [[nodiscard]] int GetRequestedMsaaSamples() const
     {
@@ -172,7 +172,7 @@ class SceneRenderGraph
     }
 
     // ========================================================================
-    // Resource Management (Phase 0 - NEW)
+    // Resource management
     // ========================================================================
 
     /**
@@ -282,10 +282,34 @@ class SceneRenderGraph
     // ========================================================================
 
     /// @brief Cache draw calls for this render graph (called by SubmitCulling)
-    void SetCachedDrawCalls(std::vector<DrawCall> drawCalls)
+    void SetCachedDrawCalls(std::vector<DrawCall> &&drawCalls)
     {
         m_cachedDrawCalls = std::move(drawCalls);
         m_hasCachedDrawCalls = true;
+    }
+
+    /// @brief Cache shadow-caster candidates for this graph.
+    void SetCachedShadowDrawCalls(std::vector<DrawCall> &&drawCalls)
+    {
+        m_cachedShadowDrawCalls = std::move(drawCalls);
+        m_cachedShadowDrawCallsRef = nullptr;
+        m_hasCachedShadowDrawCalls = true;
+    }
+
+    /// @brief Reference external shadow-caster candidates (zero-copy).
+    /// The referenced vector must outlive the graph's usage (e.g. SceneRenderer cache).
+    void SetCachedShadowDrawCallsRef(const std::vector<DrawCall> *ref)
+    {
+        m_cachedShadowDrawCallsRef = ref;
+        m_hasCachedShadowDrawCalls = (ref != nullptr && !ref->empty());
+    }
+
+    /// @brief Clear cached shadow-caster candidates.
+    void ClearCachedShadowDrawCalls()
+    {
+        m_cachedShadowDrawCalls.clear();
+        m_cachedShadowDrawCallsRef = nullptr;
+        m_hasCachedShadowDrawCalls = false;
     }
 
     /// @brief Get cached draw calls
@@ -298,6 +322,26 @@ class SceneRenderGraph
     [[nodiscard]] bool HasCachedDrawCalls() const
     {
         return m_hasCachedDrawCalls;
+    }
+
+    /// @brief Get cached shadow draw calls (prefers external ref if set).
+    [[nodiscard]] const std::vector<DrawCall> &GetCachedShadowDrawCalls() const
+    {
+        if (m_cachedShadowDrawCallsRef)
+            return *m_cachedShadowDrawCallsRef;
+        return m_cachedShadowDrawCalls;
+    }
+
+    /// @brief Check if this graph has cached shadow draw calls.
+    [[nodiscard]] bool HasCachedShadowDrawCalls() const
+    {
+        return m_hasCachedShadowDrawCalls;
+    }
+
+    /// @brief True when the current Python graph contains a shadow-caster pass.
+    [[nodiscard]] bool HasShadowCasterPass() const
+    {
+        return m_hasShadowCasterPass;
     }
 
     // ========================================================================
@@ -329,6 +373,9 @@ class SceneRenderGraph
     {
         m_cachedDrawCalls.clear();
         m_hasCachedDrawCalls = false;
+        m_cachedShadowDrawCalls.clear();
+        m_cachedShadowDrawCallsRef = nullptr;
+        m_hasCachedShadowDrawCalls = false;
         m_cachedView = glm::mat4(1.0f);
         m_cachedProj = glm::mat4(1.0f);
         m_hasCachedCameraVP = false;
@@ -344,6 +391,7 @@ class SceneRenderGraph
         // pipeline calls ApplyPythonGraph().  This avoids the MSAA
         // mismatch guard firing on an outdated descriptor.
         m_hasPythonGraph = false;
+        m_hasShadowCasterPass = false;
         m_pythonGraphDesc = {};
     }
 
@@ -377,6 +425,25 @@ class SceneRenderGraph
     void BuildRenderGraph();
 
     /**
+     * @brief Pre-register all non-backbuffer transient textures so their
+     * ResourceHandles are available before passes reference them.
+     */
+    void RegisterTransientTextures(uint32_t width, uint32_t height,
+                                   std::unordered_map<std::string, vk::ResourceHandle> &customRTHandles);
+
+    /**
+     * @brief Append a system auto-pass (gizmos / editor tools) that draws
+     * into the backbuffer with read-only depth testing.
+     */
+    void AppendAutoPass(const std::string &name, vk::ResourceHandle colorTarget, vk::ResourceHandle depthTarget,
+                        uint32_t width, uint32_t height);
+
+    /**
+     * @brief Set the graph output handle for dead-pass culling.
+     */
+    void FinalizeGraphOutput(const std::unordered_map<std::string, vk::ResourceHandle> &customRTHandles);
+
+    /**
      * @brief Import scene target resources into RenderGraph
      */
     void ImportSceneTargetResources();
@@ -397,7 +464,7 @@ class SceneRenderGraph
     // Python graph description (stored for BuildRenderGraph)
     RenderGraphDescription m_pythonGraphDesc;
 
-    // Python-driven render callbacks: pass name → ScenePassRenderCallback.
+    // Render callbacks keyed by pass name.
     // Populated by ApplyPythonGraph(). BuildRenderGraph() reads this map directly,
     // bypassing the intermediate ScenePassConfig conversion.
     std::unordered_map<std::string, ScenePassRenderCallback> m_pythonCallbacks;
@@ -436,6 +503,10 @@ class SceneRenderGraph
     // Per-graph draw call cache for multi-camera rendering
     std::vector<DrawCall> m_cachedDrawCalls;
     bool m_hasCachedDrawCalls = false;
+    std::vector<DrawCall> m_cachedShadowDrawCalls;
+    const std::vector<DrawCall> *m_cachedShadowDrawCallsRef = nullptr;
+    bool m_hasCachedShadowDrawCalls = false;
+    bool m_hasShadowCasterPass = false;
 
     // Per-graph camera VP cache — set by SubmitCulling so the executor
     // uses the exact same matrices that were active during SetupCameraProperties.

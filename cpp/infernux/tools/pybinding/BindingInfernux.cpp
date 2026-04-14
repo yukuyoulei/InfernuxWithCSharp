@@ -39,6 +39,7 @@ void RegisterTagLayerBindings(py::module_ &m);
 void RegisterInputBindings(py::module_ &m);
 void RegisterPhysicsBindings(py::module_ &m);
 void RegisterAudioBindings(py::module_ &m);
+void RegisterBatchBindings(py::module_ &m);
 } // namespace infernux
 
 PYBIND11_MODULE(_Infernux, m)
@@ -568,12 +569,55 @@ PYBIND11_MODULE(_Infernux, m)
             },
             py::arg("visible"), "Enable/disable scene view rendering")
         .def(
+            "set_gui_player_mode",
+            [](Infernux &self, bool enabled) {
+                auto *r = self.GetRenderer();
+                if (r)
+                    r->SetGUIPlayerMode(enabled);
+            },
+            py::arg("enabled"), "Skip DockSpace/layout overhead in standalone player mode")
+        .def(
             "is_game_camera_enabled",
             [](Infernux &self) -> bool {
                 auto *r = self.GetRenderer();
                 return r && r->IsGameCameraEnabled();
             },
             "Check if game camera rendering is enabled")
+        .def(
+            "get_last_game_render_ms",
+            [](Infernux &self) -> double {
+                auto *r = self.GetRenderer();
+                return r ? r->GetLastGameRenderMs() : 0.0;
+            },
+            "Get last frame's game view render time (CPU command recording) in ms, excluding editor panels")
+        .def(
+            "get_game_only_frame_ms",
+            [](Infernux &self) -> double {
+                auto *r = self.GetRenderer();
+                return r ? r->GetGameOnlyFrameMs() : 0.0;
+            },
+            "Get game-only frame cost in ms (SceneUpdate + PrepareFrame + GameRender), excluding editor panels")
+        .def(
+            "get_scene_update_ms",
+            [](Infernux &self) -> double {
+                auto *r = self.GetRenderer();
+                return r ? r->GetSceneUpdateMs() : 0.0;
+            },
+            "Get SceneManager::Update + LateUpdate time in ms")
+        .def(
+            "get_gui_build_ms",
+            [](Infernux &self) -> double {
+                auto *r = self.GetRenderer();
+                return r ? r->GetGuiBuildMs() : 0.0;
+            },
+            "Get GUI::BuildFrame (all ImGui panels) time in ms")
+        .def(
+            "get_prepare_frame_ms",
+            [](Infernux &self) -> double {
+                auto *r = self.GetRenderer();
+                return r ? r->GetPrepareFrameMs() : 0.0;
+            },
+            "Get PrepareFrame (collect/cull renderables) time in ms")
         .def(
             "get_screen_ui_renderer",
             [](Infernux &self) -> InxScreenUIRenderer * {
@@ -618,6 +662,84 @@ PYBIND11_MODULE(_Infernux, m)
                 return r ? r->GetPresentMode() : 1;
             },
             "Get current present mode (0=IMMEDIATE, 1=MAILBOX, 2=FIFO, 3=FIFO_RELAXED)")
+        // ========================================================================
+        // Editor Power-Save / Idle Mode
+        // ========================================================================
+        .def(
+            "set_editor_idle_enabled",
+            [](Infernux &self, bool enabled) {
+                auto *r = self.GetRenderer();
+                if (r)
+                    r->SetEditorIdleEnabled(enabled);
+            },
+            py::arg("enabled"), "Enable/disable editor idle mode (reduced FPS when no input)")
+        .def(
+            "is_editor_idle_enabled",
+            [](Infernux &self) -> bool {
+                auto *r = self.GetRenderer();
+                return r && r->IsEditorIdleEnabled();
+            },
+            "Check if editor idle mode is enabled")
+        .def(
+            "set_editor_idle_fps",
+            [](Infernux &self, float fps) {
+                auto *r = self.GetRenderer();
+                if (r)
+                    r->SetEditorIdleFps(fps);
+            },
+            py::arg("fps"), "Set idle-mode target FPS (e.g. 10). 0 disables idling.")
+        .def(
+            "get_editor_idle_fps",
+            [](Infernux &self) -> float {
+                auto *r = self.GetRenderer();
+                return r ? r->GetEditorIdleFps() : 0.0f;
+            },
+            "Get idle-mode target FPS")
+        .def(
+            "is_editor_idling",
+            [](Infernux &self) -> bool {
+                auto *r = self.GetRenderer();
+                return r && r->IsEditorIdling();
+            },
+            "Check if editor is currently in idle (reduced FPS) state")
+        .def(
+            "request_full_speed_frame",
+            [](Infernux &self) {
+                auto *r = self.GetRenderer();
+                if (r)
+                    r->RequestFullSpeedFrame();
+            },
+            "Force full-speed rendering for the next few frames")
+        .def(
+            "set_editor_fps_cap",
+            [](Infernux &self, float fps) {
+                auto *r = self.GetRenderer();
+                if (r)
+                    r->SetEditorFpsCap(fps);
+            },
+            py::arg("fps"), "Set editor-mode FPS cap (e.g. 60). 0 = uncapped. Only applies outside play mode.")
+        .def(
+            "get_editor_fps_cap",
+            [](Infernux &self) -> float {
+                auto *r = self.GetRenderer();
+                return r ? r->GetEditorFpsCap() : 0.0f;
+            },
+            "Get editor-mode FPS cap")
+        .def(
+            "set_play_mode_rendering",
+            [](Infernux &self, bool play) {
+                auto *r = self.GetRenderer();
+                if (r)
+                    r->SetPlayModeRendering(play);
+            },
+            py::arg("play"), "Enable/disable play-mode rendering (uncapped FPS, no idle)")
+        .def(
+            "is_play_mode_rendering",
+            [](Infernux &self) -> bool {
+                auto *r = self.GetRenderer();
+                return r && r->IsPlayModeRendering();
+            },
+            "Check if renderer is in play-mode (uncapped FPS)")
         // ========================================================================
         // Scene Picking API - for editor selection
         // ========================================================================
@@ -777,7 +899,6 @@ PYBIND11_MODULE(_Infernux, m)
                 static int64_t s_lastIconUploadCount = -1;
                 if (s_lastIconUploadCount != iconCount) {
                     uint32_t firstKind = entries.empty() ? 0u : entries.front().iconKind;
-                    INXLOG_INFO("GizmoIcons: uploaded ", iconCount, " icon entry(ies); firstKind=", firstKind);
                     s_lastIconUploadCount = iconCount;
                 }
 
@@ -853,6 +974,10 @@ PYBIND11_MODULE(_Infernux, m)
         "reload_managed_runtime_if_changed", []() { return ManagedRuntimeHost::Instance().ReloadScriptsIfChanged(); },
         "Rebind the native managed runtime host to the latest compiled gameplay assembly when it changes.");
 
+    m.def(
+        "inflog_internal", [](const std::string &msg) { INXLOG_INFO_INTERNAL(msg); }, py::arg("msg"),
+        "Write an internal INFO-level message to the engine log without surfacing it in the editor console.");
+
     // Register all binding modules
     RegisterGUIBindings(m);
     RegisterVector2Bindings(m);
@@ -869,6 +994,7 @@ PYBIND11_MODULE(_Infernux, m)
     RegisterInputBindings(m);
     RegisterPhysicsBindings(m);
     RegisterAudioBindings(m);
+    RegisterBatchBindings(m);
 
     // ====================================================================
     // Gizmo geometry generation helpers (pure math, no engine state needed)

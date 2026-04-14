@@ -129,6 +129,12 @@ void RestoreBuiltinPrimitiveMesh(const std::string &name, std::vector<Vertex> &v
     indices.assign(builtinIndices->begin(), builtinIndices->end());
 }
 
+void NotifyRenderableStateChanged(MeshRenderer *renderer)
+{
+    if (renderer)
+        SceneManager::Instance().NotifyMeshRendererChanged(renderer);
+}
+
 } // namespace
 
 INFERNUX_REGISTER_COMPONENT("MeshRenderer", MeshRenderer)
@@ -163,12 +169,45 @@ void MeshRenderer::SetMesh(std::vector<Vertex> vertices, std::vector<uint32_t> i
     if (m_meshAsset.HasGuid())
         AssetDependencyGraph::Instance().RemoveDependency(GetInstanceGuid(), m_meshAsset.GetGuid());
 
+    m_sharedVertices = nullptr;
+    m_sharedIndices = nullptr;
     m_inlineVertices = std::move(vertices);
     m_inlineIndices = std::move(indices);
     m_useInlineMesh = true;
     m_meshAsset.Clear();
     m_meshBufferDirty = true;
     ComputeLocalBoundsFromInlineVertices();
+    NotifyRenderableStateChanged(this);
+}
+
+void MeshRenderer::SetSharedPrimitiveMesh(const std::vector<Vertex> &vertices, const std::vector<uint32_t> &indices,
+                                          const std::string &primitiveName)
+{
+    if (m_meshAsset.HasGuid())
+        AssetDependencyGraph::Instance().RemoveDependency(GetInstanceGuid(), m_meshAsset.GetGuid());
+
+    m_inlineVertices.clear();
+    m_inlineIndices.clear();
+    m_sharedVertices = &vertices;
+    m_sharedIndices = &indices;
+    m_useInlineMesh = true;
+    m_inlineMeshName = primitiveName;
+    m_meshAsset.Clear();
+    m_meshBufferDirty = true;
+
+    // Cache bounds per primitive type (keyed by static vertex data address).
+    // Avoids iterating all vertices for every identical primitive.
+    static std::unordered_map<const void *, std::pair<glm::vec3, glm::vec3>> s_boundsCache;
+    auto it = s_boundsCache.find(&vertices);
+    if (it != s_boundsCache.end()) {
+        m_localBoundsMin = it->second.first;
+        m_localBoundsMax = it->second.second;
+    } else {
+        ComputeLocalBoundsFromInlineVertices();
+        s_boundsCache[&vertices] = {m_localBoundsMin, m_localBoundsMax};
+    }
+
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::SetMeshAsset(const std::string &guid, std::shared_ptr<InxMesh> mesh)
@@ -182,6 +221,8 @@ void MeshRenderer::SetMeshAsset(const std::string &guid, std::shared_ptr<InxMesh
     m_meshBufferDirty = true;
     m_inlineVertices.clear();
     m_inlineIndices.clear();
+    m_sharedVertices = nullptr;
+    m_sharedIndices = nullptr;
 
     if (!guid.empty())
         graph.AddDependency(GetInstanceGuid(), guid);
@@ -195,6 +236,7 @@ void MeshRenderer::SetMeshAsset(const std::string &guid, std::shared_ptr<InxMesh
     }
 
     SyncMaterialSlotsToMesh();
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::SetMeshAssetGuid(const std::string &guid)
@@ -208,9 +250,13 @@ void MeshRenderer::SetMeshAssetGuid(const std::string &guid)
     m_meshBufferDirty = true;
     m_inlineVertices.clear();
     m_inlineIndices.clear();
+    m_sharedVertices = nullptr;
+    m_sharedIndices = nullptr;
 
     if (!guid.empty())
         graph.AddDependency(GetInstanceGuid(), guid);
+
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::ClearMeshAsset()
@@ -223,8 +269,11 @@ void MeshRenderer::ClearMeshAsset()
     m_useInlineMesh = false;
     m_inlineVertices.clear();
     m_inlineIndices.clear();
+    m_sharedVertices = nullptr;
+    m_sharedIndices = nullptr;
     m_localBoundsMin = glm::vec3(-0.5f);
     m_localBoundsMax = glm::vec3(0.5f);
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::OnMeshAssetEvent(AssetEvent event)
@@ -248,6 +297,7 @@ void MeshRenderer::OnMeshAssetEvent(AssetEvent event)
         SetLocalBounds(mesh->GetBoundsMin(), mesh->GetBoundsMax());
     SyncMaterialSlotsToMesh();
     MarkMeshBufferDirty();
+    NotifyRenderableStateChanged(this);
 }
 
 bool MeshRenderer::ConsumeMeshBufferDirty()
@@ -277,6 +327,8 @@ void MeshRenderer::SetMaterial(uint32_t slot, std::shared_ptr<InxMaterial> mater
     auto newMat = ref.Get();
     if (newMat && !newMat->GetGuid().empty())
         graph.AddDependency(GetInstanceGuid(), newMat->GetGuid());
+
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::SetMaterial(uint32_t slot, const std::string &guid)
@@ -296,6 +348,8 @@ void MeshRenderer::SetMaterial(uint32_t slot, const std::string &guid)
     auto newMat = ref.Get();
     if (newMat && !newMat->GetGuid().empty())
         graph.AddDependency(GetInstanceGuid(), newMat->GetGuid());
+
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::SetMaterials(const std::vector<std::string> &guids)
@@ -317,6 +371,8 @@ void MeshRenderer::SetMaterials(const std::vector<std::string> &guids)
         if (newMat && !newMat->GetGuid().empty())
             graph.AddDependency(GetInstanceGuid(), newMat->GetGuid());
     }
+
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::SetMaterialSlotCount(uint32_t count)
@@ -332,6 +388,7 @@ void MeshRenderer::SetMaterialSlotCount(uint32_t count)
             graph.RemoveDependency(GetInstanceGuid(), mat->GetGuid());
     }
     m_materials.resize(count);
+    NotifyRenderableStateChanged(this);
 }
 
 std::shared_ptr<InxMaterial> MeshRenderer::GetMaterial(uint32_t slot) const
@@ -405,7 +462,8 @@ void MeshRenderer::SyncMaterialSlotsToMesh()
 
 void MeshRenderer::ComputeLocalBoundsFromInlineVertices()
 {
-    if (m_inlineVertices.empty()) {
+    const auto &verts = GetInlineVertices();
+    if (verts.empty()) {
         m_localBoundsMin = glm::vec3(-0.5f);
         m_localBoundsMax = glm::vec3(0.5f);
         return;
@@ -413,7 +471,7 @@ void MeshRenderer::ComputeLocalBoundsFromInlineVertices()
 
     glm::vec3 bmin(std::numeric_limits<float>::max());
     glm::vec3 bmax(std::numeric_limits<float>::lowest());
-    for (const auto &v : m_inlineVertices) {
+    for (const auto &v : verts) {
         bmin = glm::min(bmin, v.pos);
         bmax = glm::max(bmax, v.pos);
     }
@@ -434,6 +492,7 @@ void MeshRenderer::SetNodeGroup(int32_t group)
             SyncMaterialSlotsToMesh();
         }
     }
+    NotifyRenderableStateChanged(this);
 }
 
 void MeshRenderer::UpdateBoundsForNodeGroup(const std::shared_ptr<InxMesh> &mesh)
@@ -462,30 +521,31 @@ void MeshRenderer::GetWorldBounds(glm::vec3 &outMin, glm::vec3 &outMax) const
     }
 
     const Transform *transform = m_gameObject->GetTransform();
-    glm::mat4 worldMatrix = transform->GetWorldMatrix();
+    const glm::mat4 &worldMatrix = transform->GetWorldMatrix();
+    ComputeWorldBounds(worldMatrix, outMin, outMax);
+}
 
-    // Transform all 8 corners of the local AABB
-    glm::vec3 corners[8] = {
-        glm::vec3(m_localBoundsMin.x, m_localBoundsMin.y, m_localBoundsMin.z),
-        glm::vec3(m_localBoundsMax.x, m_localBoundsMin.y, m_localBoundsMin.z),
-        glm::vec3(m_localBoundsMin.x, m_localBoundsMax.y, m_localBoundsMin.z),
-        glm::vec3(m_localBoundsMax.x, m_localBoundsMax.y, m_localBoundsMin.z),
-        glm::vec3(m_localBoundsMin.x, m_localBoundsMin.y, m_localBoundsMax.z),
-        glm::vec3(m_localBoundsMax.x, m_localBoundsMin.y, m_localBoundsMax.z),
-        glm::vec3(m_localBoundsMin.x, m_localBoundsMax.y, m_localBoundsMax.z),
-        glm::vec3(m_localBoundsMax.x, m_localBoundsMax.y, m_localBoundsMax.z),
-    };
+void MeshRenderer::ComputeWorldBounds(const glm::mat4 &worldMatrix, glm::vec3 &outMin, glm::vec3 &outMax) const
+{
+    // Arvo's AABB transform method: O(9) multiply-adds instead of
+    // 8 × mat4×vec4 (O(32) multiplies).  For each output axis, we
+    // compute the transformed center ± transformed half-extent.
+    const glm::vec3 center = (m_localBoundsMin + m_localBoundsMax) * 0.5f;
+    const glm::vec3 extent = (m_localBoundsMax - m_localBoundsMin) * 0.5f;
 
-    outMin = glm::vec3(std::numeric_limits<float>::max());
-    outMax = glm::vec3(std::numeric_limits<float>::lowest());
-
-    for (const auto &corner : corners) {
-        glm::vec4 worldCorner = worldMatrix * glm::vec4(corner, 1.0f);
-        glm::vec3 wc = glm::vec3(worldCorner);
-
-        outMin = glm::min(outMin, wc);
-        outMax = glm::max(outMax, wc);
+    glm::vec3 newCenter, newExtent;
+    for (int i = 0; i < 3; ++i) {
+        newCenter[i] = worldMatrix[3][i]; // translation
+        newExtent[i] = 0.0f;
+        for (int j = 0; j < 3; ++j) {
+            float e = worldMatrix[j][i]; // column-major: M[col][row]
+            newCenter[i] += e * center[j];
+            newExtent[i] += std::abs(e) * extent[j];
+        }
     }
+
+    outMin = newCenter - newExtent;
+    outMax = newCenter + newExtent;
 }
 
 std::string MeshRenderer::Serialize() const
@@ -499,11 +559,12 @@ std::string MeshRenderer::Serialize() const
     // Mesh reference
     j["meshId"] = m_mesh.meshId;
 
-    const bool builtinPrimitive = m_useInlineMesh && !m_inlineMeshName.empty() &&
-                                  MatchesBuiltinPrimitiveMesh(m_inlineMeshName, m_inlineVertices, m_inlineIndices);
+    const bool builtinPrimitive =
+        m_useInlineMesh && !m_inlineMeshName.empty() &&
+        MatchesBuiltinPrimitiveMesh(m_inlineMeshName, GetInlineVertices(), GetInlineIndices());
     const std::string matchedInlineMeshGuid =
         (!HasMeshAsset() && m_useInlineMesh && !builtinPrimitive)
-            ? FindMatchingMeshAssetGuid(m_inlineVertices, m_inlineIndices, m_inlineMeshName)
+            ? FindMatchingMeshAssetGuid(GetInlineVertices(), GetInlineIndices(), m_inlineMeshName)
             : std::string();
     const std::string serializedMeshGuid = HasMeshAsset() ? m_meshAsset.GetGuid() : matchedInlineMeshGuid;
 
@@ -554,7 +615,7 @@ std::string MeshRenderer::Serialize() const
             j["inlineMeshBuiltin"] = true;
         } else {
             json verticesJson = json::array();
-            for (const auto &v : m_inlineVertices) {
+            for (const auto &v : GetInlineVertices()) {
                 json vj;
                 vj["pos"] = {v.pos.x, v.pos.y, v.pos.z};
                 vj["normal"] = {v.normal.x, v.normal.y, v.normal.z};
@@ -566,7 +627,7 @@ std::string MeshRenderer::Serialize() const
             j["inlineVertices"] = verticesJson;
 
             json indicesJson = json::array();
-            for (uint32_t idx : m_inlineIndices) {
+            for (uint32_t idx : GetInlineIndices()) {
                 indicesJson.push_back(idx);
             }
             j["inlineIndices"] = indicesJson;
@@ -666,6 +727,8 @@ bool MeshRenderer::Deserialize(const std::string &jsonStr)
         m_inlineMeshName = j.value("inlineMeshName", std::string());
         m_inlineVertices.clear();
         m_inlineIndices.clear();
+        m_sharedVertices = nullptr;
+        m_sharedIndices = nullptr;
 
         if (m_useInlineMesh) {
             const bool isBuiltinPrimitive = j.value("inlineMeshBuiltin", false);
@@ -732,8 +795,12 @@ std::unique_ptr<Component> MeshRenderer::Clone() const
     // Inline mesh
     clone->m_useInlineMesh = m_useInlineMesh;
     clone->m_inlineMeshName = m_inlineMeshName;
-    clone->m_inlineVertices = m_inlineVertices;
-    clone->m_inlineIndices = m_inlineIndices;
+    clone->m_sharedVertices = m_sharedVertices;
+    clone->m_sharedIndices = m_sharedIndices;
+    if (!m_sharedVertices) {
+        clone->m_inlineVertices = m_inlineVertices;
+        clone->m_inlineIndices = m_inlineIndices;
+    }
     // Materials
     clone->m_materials = m_materials;
     // Rendering flags

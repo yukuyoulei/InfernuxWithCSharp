@@ -1,6 +1,21 @@
+#include "Infernux.h"
+
+#ifdef DrawText
+#undef DrawText
+#endif
+
 #include "gui/InxGUIContext.h"
 #include "gui/InxGUIRenderable.h"
 #include "gui/InxResourcePreviewer.h"
+#include <function/editor/ConsolePanel.h>
+#include <function/editor/EditorPanel.h>
+#include <function/editor/HierarchyPanel.h>
+#include <function/editor/InspectorPanel.h>
+#include <function/editor/MenuBarPanel.h>
+#include <function/editor/ProjectPanel.h>
+#include <function/editor/StatusBarPanel.h>
+#include <function/editor/ToolbarPanel.h>
+#include <memory>
 #include <pybind11/chrono.h>
 #include <pybind11/complex.h>
 #include <pybind11/functional.h>
@@ -45,10 +60,127 @@ py::tuple RenderTransformFields(InxGUIContext &ctx, float px, float py, float pz
     return py::make_tuple(pos[0], pos[1], pos[2], rot[0], rot[1], rot[2], scl[0], scl[1], scl[2]);
 }
 
+PropertyDesc DecodePropertyDesc(const py::dict &d)
+{
+    PropertyDesc p;
+    p.type = static_cast<PropertyDesc::Type>(d["t"].cast<int>());
+    p.widgetId = d["w"].cast<std::string>();
+    p.label = d["n"].cast<std::string>();
+    switch (p.type) {
+    case PropertyDesc::Float:
+        p.fVal[0] = d["f"].cast<float>();
+        break;
+    case PropertyDesc::Int:
+        p.iVal = d["i"].cast<int>();
+        break;
+    case PropertyDesc::Bool:
+        p.bVal = d["b"].cast<bool>();
+        break;
+    case PropertyDesc::String:
+        p.sVal = d["s"].cast<std::string>();
+        break;
+    case PropertyDesc::Vec2:
+        p.fVal[0] = d["f"].cast<float>();
+        p.fVal[1] = d["f2"].cast<float>();
+        break;
+    case PropertyDesc::Vec3:
+        p.fVal[0] = d["f"].cast<float>();
+        p.fVal[1] = d["f2"].cast<float>();
+        p.fVal[2] = d["f3"].cast<float>();
+        break;
+    case PropertyDesc::Vec4:
+        p.fVal[0] = d["f"].cast<float>();
+        p.fVal[1] = d["f2"].cast<float>();
+        p.fVal[2] = d["f3"].cast<float>();
+        p.fVal[3] = d["f4"].cast<float>();
+        break;
+    case PropertyDesc::Enum:
+        p.iVal = d["ei"].cast<int>();
+        p.enumNames = d["en"].cast<std::vector<std::string>>();
+        break;
+    case PropertyDesc::Color:
+        p.fVal[0] = d["f"].cast<float>();
+        p.fVal[1] = d["f2"].cast<float>();
+        p.fVal[2] = d["f3"].cast<float>();
+        p.fVal[3] = d["f4"].cast<float>();
+        break;
+    }
+    if (d.contains("mn"))
+        p.rangeMin = d["mn"].cast<float>();
+    if (d.contains("mx"))
+        p.rangeMax = d["mx"].cast<float>();
+    if (d.contains("sp"))
+        p.speed = d["sp"].cast<float>();
+    if (d.contains("sl"))
+        p.slider = d["sl"].cast<bool>();
+    if (d.contains("ml"))
+        p.multiline = d["ml"].cast<bool>();
+    if (d.contains("hdr"))
+        p.header = d["hdr"].cast<std::string>();
+    if (d.contains("spc"))
+        p.space = d["spc"].cast<float>();
+    if (d.contains("tt"))
+        p.tooltip = d["tt"].cast<std::string>();
+    return p;
+}
+
+std::vector<PropertyDesc> DecodePropertyBatch(py::list descriptors)
+{
+    std::vector<PropertyDesc> props;
+    const int n = static_cast<int>(py::len(descriptors));
+    props.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        props.push_back(DecodePropertyDesc(descriptors[i].cast<py::dict>()));
+    }
+    return props;
+}
+
+py::dict EncodePropertyChanges(const std::vector<PropertyChange> &changes)
+{
+    py::dict result;
+    for (const auto &c : changes) {
+        py::int_ key(c.index);
+        switch (c.type) {
+        case PropertyDesc::Float:
+            result[key] = py::float_(c.fVal[0]);
+            break;
+        case PropertyDesc::Int:
+            result[key] = py::int_(c.iVal);
+            break;
+        case PropertyDesc::Bool:
+            result[key] = py::bool_(c.bVal);
+            break;
+        case PropertyDesc::String:
+            result[key] = py::str(c.sVal);
+            break;
+        case PropertyDesc::Vec2:
+            result[key] = py::make_tuple(c.fVal[0], c.fVal[1]);
+            break;
+        case PropertyDesc::Vec3:
+            result[key] = py::make_tuple(c.fVal[0], c.fVal[1], c.fVal[2]);
+            break;
+        case PropertyDesc::Vec4:
+            result[key] = py::make_tuple(c.fVal[0], c.fVal[1], c.fVal[2], c.fVal[3]);
+            break;
+        case PropertyDesc::Enum:
+            result[key] = py::int_(c.iVal);
+            break;
+        case PropertyDesc::Color:
+            result[key] = py::make_tuple(c.fVal[0], c.fVal[1], c.fVal[2], c.fVal[3]);
+            break;
+        }
+    }
+    return result;
+}
+
 } // anonymous namespace
 
 void RegisterGUIBindings(py::module_ &m)
 {
+    py::class_<PropertyBatchPlan, std::shared_ptr<PropertyBatchPlan>>(m, "PropertyBatchPlan")
+        .def_property_readonly("size",
+                               [](const PropertyBatchPlan &plan) { return static_cast<int>(plan.descriptors.size()); });
+
     py::class_<InxGUIContext>(m, "InxGUIContext")
         .def("label", &InxGUIContext::Label)
         .def("text_wrapped", &InxGUIContext::TextWrapped)
@@ -516,7 +648,33 @@ void RegisterGUIBindings(py::module_ &m)
             },
             py::arg("px"), py::arg("py"), py::arg("pz"), py::arg("rx"), py::arg("ry"), py::arg("rz"), py::arg("sx"),
             py::arg("sy"), py::arg("sz"), py::arg("speed_pos"), py::arg("speed_rot"), py::arg("speed_scl"),
-            py::arg("label_width"), "Render Position/Rotation/Scale vector3 controls in one call.");
+            py::arg("label_width"), "Render Position/Rotation/Scale vector3 controls in one call.")
+        .def(
+            "create_property_batch_plan",
+            [](InxGUIContext &, py::list descriptors) {
+                auto plan = std::make_shared<PropertyBatchPlan>();
+                plan->descriptors = DecodePropertyBatch(descriptors);
+                return plan;
+            },
+            py::arg("descriptors"),
+            "Compile a property descriptor list into a reusable native batch plan.")
+        // ── Batch property renderer (N fields in 1 call) ───────────
+        .def(
+            "render_property_batch",
+            [](InxGUIContext &ctx, py::list descriptors, float labelWidth) -> py::dict {
+                return EncodePropertyChanges(ctx.RenderPropertyBatch(DecodePropertyBatch(descriptors), labelWidth));
+            },
+            py::arg("descriptors"), py::arg("label_width"),
+            "Render a batch of property fields in one call. Returns {index: new_value} for changed fields.")
+        .def(
+            "render_property_batch_plan",
+            [](InxGUIContext &ctx, const std::shared_ptr<PropertyBatchPlan> &plan, float labelWidth) -> py::dict {
+                if (!plan)
+                    return py::dict();
+                return EncodePropertyChanges(ctx.RenderPropertyBatch(plan->descriptors, labelWidth));
+            },
+            py::arg("plan"), py::arg("label_width"),
+            "Render a reusable native property batch plan. Returns {index: new_value} for changed fields.");
 
     py::class_<InxGUIRenderable, PyGUIRenderable, std::shared_ptr<InxGUIRenderable>>(m, "InxGUIRenderable",
                                                                                      py::dynamic_attr())
@@ -542,6 +700,376 @@ void RegisterGUIBindings(py::module_ &m)
              "Get the current previewer type name")
         .def("set_preview_settings", &ResourcePreviewManager::SetPreviewSettings, py::arg("display_mode"),
              py::arg("max_size"), py::arg("srgb"), "Set preview settings (display mode, max size, sRGB)");
+
+    // EditorPanel — C++ base class for native panels
+    py::class_<EditorPanel, InxGUIRenderable, std::shared_ptr<EditorPanel>>(m, "EditorPanel", py::dynamic_attr())
+        .def("is_open", &EditorPanel::IsOpen, "Check if the panel is open")
+        .def("set_open", &EditorPanel::SetOpen, py::arg("open"), "Set whether the panel is open")
+        .def("get_window_id", &EditorPanel::GetWindowId, "Get the stable window ID");
+
+    // ConsolePanel — C++ native console that replaces the Python ConsolePanel
+    py::class_<ConsolePanel, EditorPanel, std::shared_ptr<ConsolePanel>>(m, "ConsolePanel")
+        .def(py::init<>())
+        .def("log_from_python", &ConsolePanel::LogFromPython, py::arg("level"), py::arg("message"),
+             py::arg("stack_trace") = "", py::arg("source_file") = "", py::arg("source_line") = 0,
+             "Log a message originating from Python Debug.log()")
+        .def("clear", &ConsolePanel::Clear, "Clear all log entries")
+        .def("get_info_count", &ConsolePanel::GetInfoCount, "Get count of info messages")
+        .def("get_warning_count", &ConsolePanel::GetWarningCount, "Get count of warning messages")
+        .def("get_error_count", &ConsolePanel::GetErrorCount, "Get count of error messages")
+        .def("select_latest_entry", &ConsolePanel::SelectLatestEntry, "Select last visible entry and focus window")
+        .def_readwrite("show_info", &ConsolePanel::showInfo)
+        .def_readwrite("show_warnings", &ConsolePanel::showWarnings)
+        .def_readwrite("show_errors", &ConsolePanel::showErrors)
+        .def_readwrite("collapse", &ConsolePanel::collapse)
+        .def_readwrite("clear_on_play", &ConsolePanel::clearOnPlay)
+        .def_readwrite("error_pause", &ConsolePanel::errorPause)
+        .def_readwrite("auto_scroll", &ConsolePanel::autoScroll)
+        .def_readwrite("on_double_click_entry", &ConsolePanel::onDoubleClickEntry);
+
+    // ── PlayState enum ─────────────────────────────────────────────────
+    py::enum_<PlayState>(m, "PlayState")
+        .value("Edit", PlayState::Edit)
+        .value("Playing", PlayState::Playing)
+        .value("Paused", PlayState::Paused);
+
+    // ── WindowTypeInfo ─────────────────────────────────────────────────
+    py::class_<WindowTypeInfo>(m, "WindowTypeInfo")
+        .def(py::init<>())
+        .def_readwrite("type_id", &WindowTypeInfo::typeId)
+        .def_readwrite("display_name", &WindowTypeInfo::displayName)
+        .def_readwrite("singleton", &WindowTypeInfo::singleton);
+
+    // ── StatusBarPanel ─────────────────────────────────────────────────
+    py::class_<StatusBarPanel, InxGUIRenderable, std::shared_ptr<StatusBarPanel>>(m, "StatusBarPanel")
+        .def(py::init<>())
+        .def(
+            "set_console_panel",
+            [](StatusBarPanel &self, std::shared_ptr<ConsolePanel> panel) { self.SetConsolePanel(panel.get()); },
+            py::arg("console"), py::keep_alive<1, 2>(), "Wire to ConsolePanel for click-to-select-latest")
+        .def("set_latest_message", &StatusBarPanel::SetLatestMessage, py::arg("message"), py::arg("level"),
+             "Show a new log message in the left zone")
+        .def("clear_counts", &StatusBarPanel::ClearCounts, "Reset counts and latest message")
+        .def("set_engine_status", &StatusBarPanel::SetEngineStatus, py::arg("text"), py::arg("progress"),
+             "Update engine-status indicator")
+        .def("increment_warn_count", &StatusBarPanel::IncrementWarnCount)
+        .def("increment_error_count", &StatusBarPanel::IncrementErrorCount);
+
+    // ── ToolbarPanel ───────────────────────────────────────────────────
+    py::class_<ToolbarPanel, EditorPanel, std::shared_ptr<ToolbarPanel>>(m, "ToolbarPanel")
+        .def(py::init<>())
+        .def_readwrite("on_play", &ToolbarPanel::onPlay)
+        .def_readwrite("on_pause", &ToolbarPanel::onPause)
+        .def_readwrite("on_step", &ToolbarPanel::onStep)
+        .def_readwrite("get_play_state", &ToolbarPanel::getPlayState)
+        .def_readwrite("get_play_time_str", &ToolbarPanel::getPlayTimeStr)
+        .def_readwrite("is_show_grid", &ToolbarPanel::isShowGrid)
+        .def_readwrite("set_show_grid", &ToolbarPanel::setShowGrid)
+        .def_readwrite("translate", &ToolbarPanel::translate)
+        .def(
+            "get_camera_settings",
+            [](const ToolbarPanel &self) -> py::dict {
+                auto s = self.GetCameraSettings();
+                py::dict d;
+                d["fov"] = s.fov;
+                d["rotation_speed"] = s.rotationSpeed;
+                d["pan_speed"] = s.panSpeed;
+                d["zoom_speed"] = s.zoomSpeed;
+                d["move_speed"] = s.moveSpeed;
+                d["move_speed_boost"] = s.moveSpeedBoost;
+                return d;
+            },
+            "Get camera settings as dict")
+        .def(
+            "set_camera_settings",
+            [](ToolbarPanel &self, py::dict d) {
+                ToolbarPanel::CameraSettings s;
+                s.fov = d.contains("fov") ? d["fov"].cast<float>() : 60.0f;
+                s.rotationSpeed = d.contains("rotation_speed") ? d["rotation_speed"].cast<float>() : 0.05f;
+                s.panSpeed = d.contains("pan_speed") ? d["pan_speed"].cast<float>() : 1.0f;
+                s.zoomSpeed = d.contains("zoom_speed") ? d["zoom_speed"].cast<float>() : 1.0f;
+                s.moveSpeed = d.contains("move_speed") ? d["move_speed"].cast<float>() : 5.0f;
+                s.moveSpeedBoost = d.contains("move_speed_boost") ? d["move_speed_boost"].cast<float>() : 3.0f;
+                self.SetCameraSettings(s);
+            },
+            py::arg("settings"), "Set camera settings from dict")
+        .def_property(
+            "sync_camera_from_engine", [](const ToolbarPanel &self) -> py::object { return py::none(); },
+            [](ToolbarPanel &self, py::function fn) {
+                self.syncCameraFromEngine = [fn]() -> ToolbarPanel::CameraSettings {
+                    py::dict d = fn();
+                    ToolbarPanel::CameraSettings s;
+                    s.fov = d.contains("fov") ? d["fov"].cast<float>() : 60.0f;
+                    s.rotationSpeed = d.contains("rotation_speed") ? d["rotation_speed"].cast<float>() : 0.05f;
+                    s.panSpeed = d.contains("pan_speed") ? d["pan_speed"].cast<float>() : 1.0f;
+                    s.zoomSpeed = d.contains("zoom_speed") ? d["zoom_speed"].cast<float>() : 1.0f;
+                    s.moveSpeed = d.contains("move_speed") ? d["move_speed"].cast<float>() : 5.0f;
+                    s.moveSpeedBoost = d.contains("move_speed_boost") ? d["move_speed_boost"].cast<float>() : 3.0f;
+                    return s;
+                };
+            },
+            "Set a Python callback that returns camera settings dict")
+        .def_property(
+            "apply_camera_to_engine", [](const ToolbarPanel &self) -> py::object { return py::none(); },
+            [](ToolbarPanel &self, py::function fn) {
+                self.applyCameraToEngine = [fn](const ToolbarPanel::CameraSettings &s) {
+                    py::dict d;
+                    d["fov"] = s.fov;
+                    d["rotation_speed"] = s.rotationSpeed;
+                    d["pan_speed"] = s.panSpeed;
+                    d["zoom_speed"] = s.zoomSpeed;
+                    d["move_speed"] = s.moveSpeed;
+                    d["move_speed_boost"] = s.moveSpeedBoost;
+                    fn(d);
+                };
+            },
+            "Set a Python callback that receives camera settings dict");
+
+    // ── MenuBarPanel ───────────────────────────────────────────────────
+    py::class_<MenuBarPanel, InxGUIRenderable, std::shared_ptr<MenuBarPanel>>(m, "MenuBarPanel")
+        .def(py::init<>())
+        .def_readwrite("on_save", &MenuBarPanel::onSave)
+        .def_readwrite("on_new_scene", &MenuBarPanel::onNewScene)
+        .def_readwrite("on_request_close", &MenuBarPanel::onRequestClose)
+        .def_readwrite("on_undo", &MenuBarPanel::onUndo)
+        .def_readwrite("on_redo", &MenuBarPanel::onRedo)
+        .def_readwrite("can_undo", &MenuBarPanel::canUndo)
+        .def_readwrite("can_redo", &MenuBarPanel::canRedo)
+        .def_readwrite("get_registered_types", &MenuBarPanel::getRegisteredTypes)
+        .def_readwrite("get_open_windows", &MenuBarPanel::getOpenWindows)
+        .def_readwrite("open_window", &MenuBarPanel::openWindow)
+        .def_readwrite("close_window", &MenuBarPanel::closeWindow)
+        .def_readwrite("reset_layout", &MenuBarPanel::resetLayout)
+        .def_readwrite("is_close_requested", &MenuBarPanel::isCloseRequested)
+        .def_readwrite("toggle_build_settings", &MenuBarPanel::toggleBuildSettings)
+        .def_readwrite("toggle_preferences", &MenuBarPanel::togglePreferences)
+        .def_readwrite("toggle_physics_layer_matrix", &MenuBarPanel::togglePhysicsLayerMatrix)
+        .def_readwrite("is_build_settings_open", &MenuBarPanel::isBuildSettingsOpen)
+        .def_readwrite("is_preferences_open", &MenuBarPanel::isPreferencesOpen)
+        .def_readwrite("is_physics_layer_matrix_open", &MenuBarPanel::isPhysicsLayerMatrixOpen)
+        .def_readwrite("translate", &MenuBarPanel::translate);
+
+    // ── HierarchyPanel ─────────────────────────────────────────────────
+    py::class_<HierarchyPanel, EditorPanel, std::shared_ptr<HierarchyPanel>>(m, "HierarchyPanel")
+        .def(py::init<>())
+        // Public API
+        .def("set_ui_mode", &HierarchyPanel::SetUiMode, py::arg("enabled"))
+        .def("get_ui_mode", &HierarchyPanel::GetUiMode)
+        .def_property("ui_mode", &HierarchyPanel::GetUiMode, &HierarchyPanel::SetUiMode)
+        .def("clear_search", &HierarchyPanel::ClearSearch)
+        .def("clear_selection_and_notify", &HierarchyPanel::ClearSelectionAndNotify)
+        .def("set_selected_object_by_id", &HierarchyPanel::SetSelectedObjectById, py::arg("id"),
+             py::arg("clear_search") = false)
+        .def("expand_to_object", &HierarchyPanel::ExpandToObject, py::arg("obj_id"))
+        .def("set_pending_expand_id", &HierarchyPanel::SetPendingExpandId, py::arg("obj_id"))
+        // Selection callbacks
+        .def_readwrite("is_selected", &HierarchyPanel::isSelected)
+        .def_readwrite("select_id", &HierarchyPanel::selectId)
+        .def_readwrite("toggle_id", &HierarchyPanel::toggleId)
+        .def_readwrite("range_select_id", &HierarchyPanel::rangeSelectId)
+        .def_readwrite("clear_selection", &HierarchyPanel::clearSelection)
+        .def_readwrite("get_primary", &HierarchyPanel::getPrimary)
+        .def_readwrite("get_selected_ids", &HierarchyPanel::getSelectedIds)
+        .def_readwrite("selection_count", &HierarchyPanel::selectionCount)
+        .def_readwrite("is_selection_empty", &HierarchyPanel::isSelectionEmpty)
+        .def_readwrite("set_ordered_ids", &HierarchyPanel::setOrderedIds)
+        // Notification callbacks
+        .def_readwrite("on_selection_changed", &HierarchyPanel::onSelectionChanged)
+        .def_readwrite("on_double_click_focus", &HierarchyPanel::onDoubleClickFocus)
+        .def_readwrite("on_selection_changed_ui_editor", &HierarchyPanel::onSelectionChangedUiEditor)
+        // Undo callbacks
+        .def_readwrite("undo_record_create", &HierarchyPanel::undoRecordCreate)
+        .def_readwrite("undo_record_delete", &HierarchyPanel::undoRecordDelete)
+        .def_readwrite("undo_record_move", &HierarchyPanel::undoRecordMove)
+        // Scene info callbacks
+        .def_readwrite("get_scene_display_name", &HierarchyPanel::getSceneDisplayName)
+        .def_readwrite("is_prefab_mode", &HierarchyPanel::isPrefabMode)
+        .def_readwrite("get_prefab_display_name", &HierarchyPanel::getPrefabDisplayName)
+        // Runtime hidden
+        .def_readwrite("get_runtime_hidden_ids", &HierarchyPanel::getRuntimeHiddenIds)
+        // Canvas / UI-mode queries
+        .def_readwrite("go_has_canvas", &HierarchyPanel::goHasCanvas)
+        .def_readwrite("go_has_ui_screen_component", &HierarchyPanel::goHasUiScreenComponent)
+        .def_readwrite("parent_has_canvas_ancestor", &HierarchyPanel::parentHasCanvasAncestor)
+        .def_readwrite("has_canvas_descendant", &HierarchyPanel::hasCanvasDescendant)
+        .def_readwrite("get_canvas_root_ids", &HierarchyPanel::getCanvasRootIds)
+        // Context-menu action callbacks
+        .def_readwrite("create_primitive", &HierarchyPanel::createPrimitive)
+        .def_readwrite("create_light", &HierarchyPanel::createLight)
+        .def_readwrite("create_camera", &HierarchyPanel::createCamera)
+        .def_readwrite("create_render_stack", &HierarchyPanel::createRenderStack)
+        .def_readwrite("create_empty", &HierarchyPanel::createEmpty)
+        .def_readwrite("create_ui_canvas", &HierarchyPanel::createUiCanvas)
+        .def_readwrite("create_ui_text", &HierarchyPanel::createUiText)
+        .def_readwrite("create_ui_button", &HierarchyPanel::createUiButton)
+        .def_readwrite("save_as_prefab", &HierarchyPanel::saveAsPrefab)
+        .def_readwrite("prefab_select_asset", &HierarchyPanel::prefabSelectAsset)
+        .def_readwrite("prefab_open_asset", &HierarchyPanel::prefabOpenAsset)
+        .def_readwrite("prefab_apply_overrides", &HierarchyPanel::prefabApplyOverrides)
+        .def_readwrite("prefab_revert_overrides", &HierarchyPanel::prefabRevertOverrides)
+        .def_readwrite("prefab_unpack", &HierarchyPanel::prefabUnpack)
+        // Clipboard callbacks
+        .def_readwrite("copy_selected", &HierarchyPanel::copySelected)
+        .def_readwrite("paste_clipboard", &HierarchyPanel::pasteClipboard)
+        .def_readwrite("has_clipboard_data", &HierarchyPanel::hasClipboardData)
+        // External drop callbacks
+        .def_readwrite("instantiate_prefab", &HierarchyPanel::instantiatePrefab)
+        .def_readwrite("create_model_object", &HierarchyPanel::createModelObject)
+        // Delete
+        .def_readwrite("delete_selected_objects", &HierarchyPanel::deleteSelectedObjects)
+        // Translation
+        .def_readwrite("translate", &HierarchyPanel::translate)
+        // Warning
+        .def_readwrite("show_warning", &HierarchyPanel::showWarning);
+
+    // ── ProjectPanel ───────────────────────────────────────────────────
+    py::class_<ProjectPanel, EditorPanel, std::shared_ptr<ProjectPanel>>(m, "ProjectPanel")
+        .def(py::init<>())
+        // Public API
+        .def("set_root_path", &ProjectPanel::SetRootPath, py::arg("path"))
+        .def(
+            "setup_from_engine",
+            [](ProjectPanel &self, Infernux &engine) {
+                self.SetRenderer(engine.GetRenderer());
+                self.SetAssetDatabase(engine.GetAssetDatabase());
+            },
+            py::arg("engine"))
+        .def("set_icons_directory", &ProjectPanel::SetIconsDirectory, py::arg("dir"))
+        .def("clear_selection", &ProjectPanel::ClearSelection)
+        .def("set_selected_file", &ProjectPanel::SetSelectedFile, py::arg("path"))
+        .def("invalidate_material_thumbnail", &ProjectPanel::InvalidateMaterialThumbnail, py::arg("file_path"))
+        .def("invalidate_dir_cache", &ProjectPanel::InvalidateDirCache)
+        .def("receive_dropped_files", &ProjectPanel::ReceiveDroppedFiles, py::arg("paths"))
+        .def("get_current_path", &ProjectPanel::GetCurrentPath)
+        .def("set_current_path", &ProjectPanel::SetCurrentPath, py::arg("path"))
+        // Notification callbacks
+        .def_readwrite("on_file_selected", &ProjectPanel::onFileSelected)
+        .def_readwrite("on_empty_area_clicked", &ProjectPanel::onEmptyAreaClicked)
+        .def_readwrite("on_state_changed", &ProjectPanel::onStateChanged)
+        // File operation callbacks
+        .def_readwrite("create_folder", &ProjectPanel::createFolder)
+        .def_readwrite("create_script", &ProjectPanel::createScript)
+        .def_readwrite("create_shader", &ProjectPanel::createShader)
+        .def_readwrite("create_material", &ProjectPanel::createMaterial)
+        .def_readwrite("create_scene", &ProjectPanel::createScene)
+        .def_readwrite("create_prefab_from_hierarchy", &ProjectPanel::createPrefabFromHierarchy)
+        .def_readwrite("delete_items", &ProjectPanel::deleteItems)
+        .def_readwrite("do_rename", &ProjectPanel::doRename)
+        .def_readwrite("get_unique_name", &ProjectPanel::getUniqueName)
+        .def_readwrite("move_item_to_directory", &ProjectPanel::moveItemToDirectory)
+        // Open/Reveal callbacks
+        .def_readwrite("open_file", &ProjectPanel::openFile)
+        .def_readwrite("open_scene", &ProjectPanel::openScene)
+        .def_readwrite("open_prefab_mode", &ProjectPanel::openPrefabMode)
+        .def_readwrite("reveal_in_explorer", &ProjectPanel::revealInExplorer)
+        // Validation / GUID callbacks
+        .def_readwrite("validate_script_component", &ProjectPanel::validateScriptComponent)
+        .def_readwrite("get_guid_from_path", &ProjectPanel::getGuidFromPath)
+        .def_readwrite("get_path_from_guid", &ProjectPanel::getPathFromGuid)
+        .def_readwrite("invalidate_asset_inspector", &ProjectPanel::invalidateAssetInspector)
+        // Translation
+        .def_readwrite("translate", &ProjectPanel::translate);
+
+    // ── InspectorPanel ─────────────────────────────────────────────────
+    py::class_<ComponentInfo>(m, "InspectorComponentInfo")
+        .def(py::init<>())
+        .def_readwrite("type_name", &ComponentInfo::typeName)
+        .def_readwrite("component_id", &ComponentInfo::componentId)
+        .def_readwrite("enabled", &ComponentInfo::enabled)
+        .def_readwrite("is_native", &ComponentInfo::isNative)
+        .def_readwrite("is_script", &ComponentInfo::isScript)
+        .def_readwrite("is_broken", &ComponentInfo::isBroken)
+        .def_readwrite("broken_error", &ComponentInfo::brokenError)
+        .def_readwrite("icon_id", &ComponentInfo::iconId);
+
+    py::class_<InspectorPanel::ObjectInfo>(m, "InspectorObjectInfo")
+        .def(py::init<>())
+        .def_readwrite("name", &InspectorPanel::ObjectInfo::name)
+        .def_readwrite("active", &InspectorPanel::ObjectInfo::active)
+        .def_readwrite("tag", &InspectorPanel::ObjectInfo::tag)
+        .def_readwrite("layer", &InspectorPanel::ObjectInfo::layer)
+        .def_readwrite("prefab_guid", &InspectorPanel::ObjectInfo::prefabGuid)
+        .def_readwrite("hide_transform", &InspectorPanel::ObjectInfo::hideTransform);
+
+    py::class_<InspectorPanel::TransformData>(m, "InspectorTransformData")
+        .def(py::init<>())
+        .def_readwrite("px", &InspectorPanel::TransformData::px)
+        .def_readwrite("py_", &InspectorPanel::TransformData::py) // avoid shadow of pybind11 py
+        .def_readwrite("pz", &InspectorPanel::TransformData::pz)
+        .def_readwrite("rx", &InspectorPanel::TransformData::rx)
+        .def_readwrite("ry", &InspectorPanel::TransformData::ry)
+        .def_readwrite("rz", &InspectorPanel::TransformData::rz)
+        .def_readwrite("sx", &InspectorPanel::TransformData::sx)
+        .def_readwrite("sy", &InspectorPanel::TransformData::sy)
+        .def_readwrite("sz", &InspectorPanel::TransformData::sz);
+
+    py::class_<InspectorPanel::AddComponentEntry>(m, "InspectorAddComponentEntry")
+        .def(py::init<>())
+        .def_readwrite("display_name", &InspectorPanel::AddComponentEntry::displayName)
+        .def_readwrite("category", &InspectorPanel::AddComponentEntry::category)
+        .def_readwrite("is_native", &InspectorPanel::AddComponentEntry::isNative)
+        .def_readwrite("script_path", &InspectorPanel::AddComponentEntry::scriptPath);
+
+    py::class_<InspectorPanel::PrefabInfo>(m, "InspectorPrefabInfo")
+        .def(py::init<>())
+        .def_readwrite("override_count", &InspectorPanel::PrefabInfo::overrideCount)
+        .def_readwrite("is_readonly", &InspectorPanel::PrefabInfo::isReadonly)
+        .def_readwrite("is_transform_readonly", &InspectorPanel::PrefabInfo::isTransformReadonly);
+
+    py::class_<InspectorPanel, EditorPanel, std::shared_ptr<InspectorPanel>>(m, "InspectorPanel")
+        .def(py::init<>())
+        // Public API
+        .def("set_selected_object_id", &InspectorPanel::SetSelectedObjectId, py::arg("id"))
+        .def("clear_selected_object", &InspectorPanel::ClearSelectedObject)
+        .def("get_selected_object_id", &InspectorPanel::GetSelectedObjectId)
+        .def("set_selected_file", &InspectorPanel::SetSelectedFile, py::arg("file_path"), py::arg("category"))
+        .def("clear_selected_file", &InspectorPanel::ClearSelectedFile)
+        .def("get_selected_file", &InspectorPanel::GetSelectedFile)
+        .def("set_detail_file", &InspectorPanel::SetDetailFile, py::arg("file_path"), py::arg("category"))
+        // Selection callbacks
+        .def_readwrite("is_multi_selection", &InspectorPanel::isMultiSelection)
+        .def_readwrite("get_selected_ids", &InspectorPanel::getSelectedIds)
+        .def_readwrite("get_value_generation", &InspectorPanel::getValueGeneration)
+        // Object info callbacks
+        .def_readwrite("get_object_info", &InspectorPanel::getObjectInfo)
+        .def_readwrite("set_object_property", &InspectorPanel::setObjectProperty)
+        // Transform callbacks
+        .def_readwrite("get_transform_data", &InspectorPanel::getTransformData)
+        .def_readwrite("set_transform_data", &InspectorPanel::setTransformData)
+        // Component enumeration
+        .def_readwrite("get_component_list", &InspectorPanel::getComponentList)
+        .def_readwrite("get_component_icon_id", &InspectorPanel::getComponentIconId)
+        // Component body rendering
+        .def_readwrite("render_component_body", &InspectorPanel::renderComponentBody)
+        .def_readwrite("consume_component_body_profile", &InspectorPanel::consumeComponentBodyProfile)
+        .def_readwrite("render_component_context_menu", &InspectorPanel::renderComponentContextMenu)
+        .def_readwrite("set_component_enabled", &InspectorPanel::setComponentEnabled)
+        // Add Component
+        .def_readwrite("get_add_component_entries", &InspectorPanel::getAddComponentEntries)
+        .def_readwrite("add_component", &InspectorPanel::addComponent)
+        // Remove Component
+        .def_readwrite("remove_component", &InspectorPanel::removeComponent)
+        // Asset / File preview
+        .def_readwrite("render_asset_inspector", &InspectorPanel::renderAssetInspector)
+        .def_readwrite("render_file_preview", &InspectorPanel::renderFilePreview)
+        // Material sections
+        .def_readwrite("render_material_sections", &InspectorPanel::renderMaterialSections)
+        // Prefab
+        .def_readwrite("get_prefab_info", &InspectorPanel::getPrefabInfo)
+        .def_readwrite("prefab_action", &InspectorPanel::prefabAction)
+        // Undo
+        .def_readwrite("undo_begin_frame", &InspectorPanel::undoBeginFrame)
+        .def_readwrite("undo_end_frame", &InspectorPanel::undoEndFrame)
+        .def_readwrite("undo_invalidate_all", &InspectorPanel::undoInvalidateAll)
+        // Tag & Layer
+        .def_readwrite("get_all_tags", &InspectorPanel::getAllTags)
+        .def_readwrite("get_all_layers", &InspectorPanel::getAllLayers)
+        // Translation
+        .def_readwrite("translate", &InspectorPanel::translate)
+        // Script drop
+        .def_readwrite("handle_script_drop", &InspectorPanel::handleScriptDrop)
+        // Window manager
+        .def_readwrite("open_window", &InspectorPanel::openWindow);
 }
 
 } // namespace infernux

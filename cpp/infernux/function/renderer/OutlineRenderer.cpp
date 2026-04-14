@@ -2,7 +2,7 @@
  * @file OutlineRenderer.cpp
  * @brief Post-process selection outline renderer implementation
  *
- * Extracted from InxVkCoreModular.cpp (Phase 1 refactoring).
+ * Extracted from InxVkCoreModular.cpp during editor/renderer separation.
  */
 
 #include "OutlineRenderer.h"
@@ -11,6 +11,7 @@
 #include "MaterialPipelineManager.h"
 #include "SceneRenderTarget.h"
 #include "shader/ShaderProgram.h"
+#include "vk/VkPipelineHelpers.h"
 #include "vk/VkRenderUtils.h"
 #include <function/resources/InxMaterial/InxMaterial.h>
 
@@ -32,15 +33,10 @@ namespace
 constexpr uint32_t kOutlineSceneUBOBinding = 0;
 constexpr uint32_t kOutlineVertexMaterialUBOBinding = 14;
 
-VkPipelineShaderStageCreateInfo MakeShaderStageInfo(VkShaderStageFlagBits stage, VkShaderModule module)
-{
-    VkPipelineShaderStageCreateInfo shaderStage{};
-    shaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStage.stage = stage;
-    shaderStage.module = module;
-    shaderStage.pName = "main";
-    return shaderStage;
-}
+using infernux::vkrender::MakeMultisampleState;
+using infernux::vkrender::MakeShaderStageInfo;
+using infernux::vkrender::MakeTriangleListInputAssembly;
+using DynamicViewportState = infernux::vkrender::DynamicViewportScissorState;
 
 struct MeshVertexInputState
 {
@@ -57,32 +53,6 @@ struct MeshVertexInputState
         createInfo.pVertexAttributeDescriptions = attrDescs.data();
     }
 };
-
-struct DynamicViewportState
-{
-    std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    VkPipelineViewportStateCreateInfo viewportState{};
-
-    DynamicViewportState()
-    {
-        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-        dynamicState.pDynamicStates = dynamicStates.data();
-
-        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        viewportState.viewportCount = 1;
-        viewportState.scissorCount = 1;
-    }
-};
-
-VkPipelineInputAssemblyStateCreateInfo MakeTriangleListInputAssembly()
-{
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    return inputAssembly;
-}
 
 VkPipelineRasterizationStateCreateInfo MakeRasterizationState(VkCullModeFlags cullMode)
 {
@@ -102,14 +72,6 @@ VkPipelineDepthStencilStateCreateInfo MakeDepthStencilState(VkBool32 depthTestEn
     depthStencil.depthTestEnable = depthTestEnable;
     depthStencil.depthWriteEnable = depthWriteEnable;
     return depthStencil;
-}
-
-VkPipelineMultisampleStateCreateInfo MakeMultisampleState(VkSampleCountFlagBits sampleCount)
-{
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = sampleCount;
-    return multisampling;
 }
 
 VkPipelineColorBlendAttachmentState MakeOpaqueColorBlendAttachment()
@@ -186,7 +148,6 @@ bool OutlineRenderer::Initialize(InxVkCoreModular *core, SceneRenderTarget *scen
     CreateOutlineMaterialResources();
 
     m_resourcesReady = true;
-    INXLOG_INFO("OutlineRenderer: post-process outline resources initialized");
     return true;
 }
 
@@ -200,34 +161,13 @@ void OutlineRenderer::Cleanup()
         m_core->GetDeviceContext().WaitIdle();
     }
 
-    if (m_outlineMaskPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, m_outlineMaskPipeline, nullptr);
-        m_outlineMaskPipeline = VK_NULL_HANDLE;
-    }
-    if (m_outlineMaskPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, m_outlineMaskPipelineLayout, nullptr);
-        m_outlineMaskPipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_outlineCompositePipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, m_outlineCompositePipeline, nullptr);
-        m_outlineCompositePipeline = VK_NULL_HANDLE;
-    }
-    if (m_outlineCompositePipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, m_outlineCompositePipelineLayout, nullptr);
-        m_outlineCompositePipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_outlineMaskDescSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_outlineMaskDescSetLayout, nullptr);
-        m_outlineMaskDescSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_outlineCompositeDescSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_outlineCompositeDescSetLayout, nullptr);
-        m_outlineCompositeDescSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_outlineDescPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, m_outlineDescPool, nullptr);
-        m_outlineDescPool = VK_NULL_HANDLE;
-    }
+    vkrender::SafeDestroy(device, m_outlineMaskPipeline);
+    vkrender::SafeDestroy(device, m_outlineMaskPipelineLayout);
+    vkrender::SafeDestroy(device, m_outlineCompositePipeline);
+    vkrender::SafeDestroy(device, m_outlineCompositePipelineLayout);
+    vkrender::SafeDestroy(device, m_outlineMaskDescSetLayout);
+    vkrender::SafeDestroy(device, m_outlineCompositeDescSetLayout);
+    vkrender::SafeDestroy(device, m_outlineDescPool);
 
     // Per-material outline resources
     for (auto &[key, pipeline] : m_perMtlOutlinePipelines) {
@@ -245,38 +185,14 @@ void OutlineRenderer::Cleanup()
     }
     m_outlineInstanceBufs.clear();
 
-    if (m_outlineMtlDescPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, m_outlineMtlDescPool, nullptr);
-        m_outlineMtlDescPool = VK_NULL_HANDLE;
-    }
-    if (m_outlineMtlPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, m_outlineMtlPipelineLayout, nullptr);
-        m_outlineMtlPipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_outlineMtlSet0Layout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_outlineMtlSet0Layout, nullptr);
-        m_outlineMtlSet0Layout = VK_NULL_HANDLE;
-    }
-    if (m_emptyDescSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_emptyDescSetLayout, nullptr);
-        m_emptyDescSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_outlineMaskFramebuffer != VK_NULL_HANDLE) {
-        vkDestroyFramebuffer(device, m_outlineMaskFramebuffer, nullptr);
-        m_outlineMaskFramebuffer = VK_NULL_HANDLE;
-    }
-    if (m_outlineCompositeFramebuffer != VK_NULL_HANDLE) {
-        vkDestroyFramebuffer(device, m_outlineCompositeFramebuffer, nullptr);
-        m_outlineCompositeFramebuffer = VK_NULL_HANDLE;
-    }
-    if (m_outlineMaskRenderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(device, m_outlineMaskRenderPass, nullptr);
-        m_outlineMaskRenderPass = VK_NULL_HANDLE;
-    }
-    if (m_outlineCompositeRenderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(device, m_outlineCompositeRenderPass, nullptr);
-        m_outlineCompositeRenderPass = VK_NULL_HANDLE;
-    }
+    vkrender::SafeDestroy(device, m_outlineMtlDescPool);
+    vkrender::SafeDestroy(device, m_outlineMtlPipelineLayout);
+    vkrender::SafeDestroy(device, m_outlineMtlSet0Layout);
+    vkrender::SafeDestroy(device, m_emptyDescSetLayout);
+    vkrender::SafeDestroy(device, m_outlineMaskFramebuffer);
+    vkrender::SafeDestroy(device, m_outlineCompositeFramebuffer);
+    vkrender::SafeDestroy(device, m_outlineMaskRenderPass);
+    vkrender::SafeDestroy(device, m_outlineCompositeRenderPass);
 
     m_outlineMaskDescSet = VK_NULL_HANDLE;
     m_outlineCompositeDescSet = VK_NULL_HANDLE;
@@ -569,33 +485,9 @@ void OutlineRenderer::CreateOutlinePipelines()
             MakeShaderStageInfo(VK_SHADER_STAGE_VERTEX_BIT, m_core->GetShaderModule("outline_mask", "vertex")),
             MakeShaderStageInfo(VK_SHADER_STAGE_FRAGMENT_BIT, m_core->GetShaderModule("outline_mask", "fragment")),
         };
-        MeshVertexInputState vertexInput;
-        VkPipelineInputAssemblyStateCreateInfo inputAssembly = MakeTriangleListInputAssembly();
-        DynamicViewportState viewportState;
-        VkPipelineRasterizationStateCreateInfo raster = MakeRasterizationState(VK_CULL_MODE_NONE);
-        VkPipelineDepthStencilStateCreateInfo depthStencil = MakeDepthStencilState(VK_FALSE, VK_FALSE);
-        VkPipelineMultisampleStateCreateInfo multisampling = MakeMultisampleState(VK_SAMPLE_COUNT_1_BIT);
-        VkPipelineColorBlendAttachmentState colorBlendAttach = MakeOpaqueColorBlendAttachment();
-        VkPipelineColorBlendStateCreateInfo colorBlend = MakeColorBlendState(colorBlendAttach);
 
-        VkGraphicsPipelineCreateInfo pipelineInfo{};
-        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
-        pipelineInfo.pStages = stages.data();
-        pipelineInfo.pVertexInputState = &vertexInput.createInfo;
-        pipelineInfo.pInputAssemblyState = &inputAssembly;
-        pipelineInfo.pViewportState = &viewportState.viewportState;
-        pipelineInfo.pRasterizationState = &raster;
-        pipelineInfo.pMultisampleState = &multisampling;
-        pipelineInfo.pDepthStencilState = &depthStencil;
-        pipelineInfo.pColorBlendState = &colorBlend;
-        pipelineInfo.pDynamicState = &viewportState.dynamicState;
-        pipelineInfo.layout = m_outlineMaskPipelineLayout;
-        pipelineInfo.renderPass = m_outlineMaskRenderPass;
-        pipelineInfo.subpass = 0;
-
-        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_outlineMaskPipeline) !=
-            VK_SUCCESS) {
+        m_outlineMaskPipeline = CreateMaskPipeline(stages.data(), m_outlineMaskPipelineLayout);
+        if (m_outlineMaskPipeline == VK_NULL_HANDLE) {
             INXLOG_ERROR("OutlineRenderer: Failed to create outline mask pipeline");
         }
     }
@@ -781,8 +673,38 @@ void OutlineRenderer::CreateOutlineMaterialResources()
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, ssboBufInfo);
         }
     }
+}
 
-    INXLOG_INFO("OutlineRenderer: per-material outline resources created");
+VkPipeline OutlineRenderer::CreateMaskPipeline(const VkPipelineShaderStageCreateInfo stages[2], VkPipelineLayout layout)
+{
+    MeshVertexInputState vertexInput;
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = MakeTriangleListInputAssembly();
+    DynamicViewportState viewportState;
+    VkPipelineRasterizationStateCreateInfo raster = MakeRasterizationState(VK_CULL_MODE_NONE);
+    VkPipelineDepthStencilStateCreateInfo depthStencil = MakeDepthStencilState(VK_FALSE, VK_FALSE);
+    VkPipelineMultisampleStateCreateInfo multisampling = MakeMultisampleState(VK_SAMPLE_COUNT_1_BIT);
+    VkPipelineColorBlendAttachmentState colorBlendAttach = MakeOpaqueColorBlendAttachment();
+    VkPipelineColorBlendStateCreateInfo colorBlend = MakeColorBlendState(colorBlendAttach);
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput.createInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState.viewportState;
+    pipelineInfo.pRasterizationState = &raster;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDynamicState = &viewportState.dynamicState;
+    pipelineInfo.layout = layout;
+    pipelineInfo.renderPass = m_outlineMaskRenderPass;
+    pipelineInfo.subpass = 0;
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    vkCreateGraphicsPipelines(m_core->GetDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+    return pipeline;
 }
 
 VkPipeline OutlineRenderer::GetOrCreateMtlOutlinePipeline(InxMaterial *material)
@@ -810,33 +732,9 @@ VkPipeline OutlineRenderer::GetOrCreateMtlOutlinePipeline(InxMaterial *material)
         MakeShaderStageInfo(VK_SHADER_STAGE_VERTEX_BIT, vertModule),
         MakeShaderStageInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragModule),
     };
-    MeshVertexInputState vertexInput;
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly = MakeTriangleListInputAssembly();
-    DynamicViewportState viewportState;
-    VkPipelineRasterizationStateCreateInfo raster = MakeRasterizationState(VK_CULL_MODE_NONE);
-    VkPipelineDepthStencilStateCreateInfo depthStencil = MakeDepthStencilState(VK_FALSE, VK_FALSE);
-    VkPipelineMultisampleStateCreateInfo multisampling = MakeMultisampleState(VK_SAMPLE_COUNT_1_BIT);
-    VkPipelineColorBlendAttachmentState colorBlendAttach = MakeOpaqueColorBlendAttachment();
-    VkPipelineColorBlendStateCreateInfo colorBlend = MakeColorBlendState(colorBlendAttach);
 
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
-    pipelineInfo.pStages = stages.data();
-    pipelineInfo.pVertexInputState = &vertexInput.createInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState.viewportState;
-    pipelineInfo.pRasterizationState = &raster;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlend;
-    pipelineInfo.pDynamicState = &viewportState.dynamicState;
-    pipelineInfo.layout = m_outlineMtlPipelineLayout;
-    pipelineInfo.renderPass = m_outlineMaskRenderPass;
-    pipelineInfo.subpass = 0;
-
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+    VkPipeline pipeline = CreateMaskPipeline(stages.data(), m_outlineMtlPipelineLayout);
+    if (pipeline == VK_NULL_HANDLE) {
         INXLOG_WARN("OutlineRenderer: Failed to create per-material outline pipeline for '", material->GetName(), "'");
         return VK_NULL_HANDLE;
     }
@@ -892,30 +790,26 @@ VkDescriptorSet OutlineRenderer::GetOrCreateMtlOutlineDescSet(InxMaterial *mater
 }
 
 // ============================================================================
-// Internal: Mask Pass
+// Internal: Shared render-pass begin helper
 // ============================================================================
 
-void OutlineRenderer::RenderOutlineMask(VkCommandBuffer cmdBuf, const std::vector<DrawCall> &drawCalls)
+void OutlineRenderer::BeginRenderPassWithFullViewport(VkCommandBuffer cmdBuf, VkRenderPass rp, VkFramebuffer fb,
+                                                      const VkClearValue &clearVal)
 {
     uint32_t w = m_sceneRenderTarget->GetWidth();
     uint32_t h = m_sceneRenderTarget->GetHeight();
 
-    // Begin mask render pass (clears mask to black, no depth)
-    VkClearValue clearValue{};
-    clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-
     VkRenderPassBeginInfo rpBegin{};
     rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpBegin.renderPass = m_outlineMaskRenderPass;
-    rpBegin.framebuffer = m_outlineMaskFramebuffer;
+    rpBegin.renderPass = rp;
+    rpBegin.framebuffer = fb;
     rpBegin.renderArea.offset = {0, 0};
     rpBegin.renderArea.extent = {w, h};
     rpBegin.clearValueCount = 1;
-    rpBegin.pClearValues = &clearValue;
+    rpBegin.pClearValues = &clearVal;
 
     vkCmdBeginRenderPass(cmdBuf, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Set viewport and scissor
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
@@ -929,6 +823,20 @@ void OutlineRenderer::RenderOutlineMask(VkCommandBuffer cmdBuf, const std::vecto
     scissor.offset = {0, 0};
     scissor.extent = {w, h};
     vkCmdSetScissor(cmdBuf, 0, 1, &scissor);
+}
+
+// ============================================================================
+// Internal: Mask Pass
+// ============================================================================
+
+void OutlineRenderer::RenderOutlineMask(VkCommandBuffer cmdBuf, const std::vector<DrawCall> &drawCalls)
+{
+    uint32_t w = m_sceneRenderTarget->GetWidth();
+    uint32_t h = m_sceneRenderTarget->GetHeight();
+
+    VkClearValue clearValue{};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    BeginRenderPassWithFullViewport(cmdBuf, m_outlineMaskRenderPass, m_outlineMaskFramebuffer, clearValue);
 
     // Render the selected object
     for (const auto &dc : drawCalls) {
@@ -964,8 +872,8 @@ void OutlineRenderer::RenderOutlineMask(VkCommandBuffer cmdBuf, const std::vecto
         if (dc.material) {
             ShaderProgram *fwdProgram = dc.material->GetPassShaderProgram(ShaderCompileTarget::Forward);
             if (fwdProgram && fwdProgram->HasVertexMaterialUBO()) {
-                VkPipeline mtlPipeline = GetOrCreateMtlOutlinePipeline(dc.material.get());
-                VkDescriptorSet mtlDescSet = GetOrCreateMtlOutlineDescSet(dc.material.get());
+                VkPipeline mtlPipeline = GetOrCreateMtlOutlinePipeline(dc.material);
+                VkDescriptorSet mtlDescSet = GetOrCreateMtlOutlineDescSet(dc.material);
 
                 if (mtlPipeline != VK_NULL_HANDLE && mtlDescSet != VK_NULL_HANDLE) {
                     // Write the object's world transform to the per-frame instance buffer
@@ -1018,35 +926,9 @@ void OutlineRenderer::RenderOutlineComposite(VkCommandBuffer cmdBuf)
     uint32_t w = m_sceneRenderTarget->GetWidth();
     uint32_t h = m_sceneRenderTarget->GetHeight();
 
-    // Begin composite render pass
     VkClearValue dummyClear{};
     dummyClear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-
-    VkRenderPassBeginInfo rpBegin{};
-    rpBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpBegin.renderPass = m_outlineCompositeRenderPass;
-    rpBegin.framebuffer = m_outlineCompositeFramebuffer;
-    rpBegin.renderArea.offset = {0, 0};
-    rpBegin.renderArea.extent = {w, h};
-    rpBegin.clearValueCount = 1;
-    rpBegin.pClearValues = &dummyClear;
-
-    vkCmdBeginRenderPass(cmdBuf, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
-
-    // Set viewport and scissor
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(w);
-    viewport.height = static_cast<float>(h);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmdBuf, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = {w, h};
-    vkCmdSetScissor(cmdBuf, 0, 1, &scissor);
+    BeginRenderPassWithFullViewport(cmdBuf, m_outlineCompositeRenderPass, m_outlineCompositeFramebuffer, dummyClear);
 
     // Bind composite pipeline
     vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_GRAPHICS, m_outlineCompositePipeline);

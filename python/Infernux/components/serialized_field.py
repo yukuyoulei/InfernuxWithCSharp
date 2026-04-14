@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import copy
 import weakref
 import threading
+from Infernux.debug import Debug
 
 if TYPE_CHECKING:
     from .component import InxComponent
@@ -109,6 +110,10 @@ class SerializedFieldDescriptor:
     
     Uses weak references to automatically clean up values when instances
     are garbage collected, preventing memory leaks.
+
+    Numeric fields (INT, FLOAT, BOOL, VEC2, VEC3, VEC4) are backed by the
+    C++ ComponentDataStore for cache-friendly batch access.  The CDS
+    identifiers are stamped on this descriptor by ``_cds_bridge.register_class``.
     """
     
     def __init__(self, metadata: FieldMetadata):
@@ -117,6 +122,10 @@ class SerializedFieldDescriptor:
         self._weak_refs: Dict[int, weakref.ref] = {}  # instance id -> weak ref
         self._lock = threading.Lock()  # Thread-safe access
         self._set_count: int = 0  # Counter for periodic dead-ref cleanup
+        # CDS backing (set by _cds_bridge.register_class; None = Python-only).
+        self._cds_class_id: Optional[int] = None
+        self._cds_field_id: Optional[int] = None
+        self._cds_type_code: Optional[int] = None
 
     def _make_ref_callback(self, inst_id: int):
         """Create a weak-ref callback that auto-cleans on GC."""
@@ -143,6 +152,11 @@ class SerializedFieldDescriptor:
     
     def get_raw(self, instance: 'InxComponent') -> Any:
         """Get the raw stored value without auto-resolution."""
+        if self._cds_class_id is not None:
+            slot = getattr(instance, '_cds_slot', None)
+            if slot is not None and getattr(instance, '_cds_class_id', None) == self._cds_class_id:
+                from ._cds_bridge import cds_get
+                return cds_get(self._cds_class_id, self._cds_field_id, self._cds_type_code, slot)
         inst_id = id(instance)
         with self._lock:
             return self._values.get(inst_id, self.metadata.default)
@@ -160,6 +174,12 @@ class SerializedFieldDescriptor:
     def __get__(self, instance: Optional['InxComponent'], owner: Type) -> Any:
         if instance is None:
             return self
+        # CDS fast path for numeric fields.
+        if self._cds_class_id is not None:
+            slot = getattr(instance, '_cds_slot', None)
+            if slot is not None and getattr(instance, '_cds_class_id', None) == self._cds_class_id:
+                from ._cds_bridge import cds_get
+                return cds_get(self._cds_class_id, self._cds_field_id, self._cds_type_code, slot)
         inst_id = id(instance)
         with self._lock:
             value = self._values.get(inst_id, self.metadata.default)
@@ -179,6 +199,25 @@ class SerializedFieldDescriptor:
             raise AttributeError(f"Field '{self.metadata.name}' is readonly")
 
         value = normalize_runtime_field_value(value, self.metadata)
+
+        # CDS fast path for numeric fields.
+        if self._cds_class_id is not None:
+            slot = getattr(instance, '_cds_slot', None)
+            if slot is not None and getattr(instance, '_cds_class_id', None) == self._cds_class_id:
+                # Undo hook (before write)
+                if not getattr(instance, '_inf_deserializing', False) and _on_field_will_change is not None:
+                    from ._cds_bridge import cds_get
+                    old_value = cds_get(self._cds_class_id, self._cds_field_id, self._cds_type_code, slot)
+                    if old_value != value:
+                        if _on_field_will_change(instance, self.metadata.name, old_value, value):
+                            return
+                from ._cds_bridge import cds_set, cds_get as _cg
+                old = _cg(self._cds_class_id, self._cds_field_id, self._cds_type_code, slot)
+                cds_set(self._cds_class_id, self._cds_field_id, self._cds_type_code, slot, value)
+                if not getattr(instance, '_inf_deserializing', False):
+                    if old != value and _on_field_did_change is not None:
+                        _on_field_did_change(instance, self.metadata.name, old, value)
+                return
 
         inst_id = id(instance)
 
@@ -238,7 +277,8 @@ def _get_asset_db():
     try:
         from Infernux.core.asset_ref import _get_asset_database
         return _get_asset_database()
-    except ImportError:
+    except ImportError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         return None
 
 
@@ -251,7 +291,8 @@ def _guid_from_path(path: str) -> str:
     try:
         guid = db.get_guid_from_path(path)
         return guid or ""
-    except Exception:
+    except Exception as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         return ""
 
 
@@ -445,38 +486,73 @@ def get_raw_field_value(component: 'InxComponent', field_name: str) -> Any:
     return getattr(component, field_name)
 
 
+# ── Type → FieldType dispatch tables (used by _infer_field_type) ──
+
+_DIRECT_TYPE_TO_FIELD: dict = {
+    int:   FieldType.INT,
+    float: FieldType.FLOAT,
+    bool:  FieldType.BOOL,
+    str:   FieldType.STRING,
+}
+
+_TYPE_NAME_TO_FIELD: dict = {
+    'Vec2': FieldType.VEC2,    'Vector2': FieldType.VEC2,    'vector2': FieldType.VEC2,
+    'Vec3': FieldType.VEC3,    'Vector3': FieldType.VEC3,    'vector3': FieldType.VEC3,
+    'vec4f': FieldType.VEC4,   'Vec4': FieldType.VEC4,
+    'Vector4': FieldType.VEC4, 'vector4': FieldType.VEC4,
+    'GameObject': FieldType.GAME_OBJECT,
+    'Material': FieldType.MATERIAL,
+    'Texture': FieldType.TEXTURE,    'TextureRef': FieldType.TEXTURE,
+    'Shader': FieldType.SHADER,     'ShaderRef': FieldType.SHADER,
+    'ShaderAssetInfo': FieldType.SHADER,
+    'AudioClip': FieldType.ASSET,   'AudioClipRef': FieldType.ASSET,
+    'ComponentRef': FieldType.COMPONENT,
+}
+
+_DEFAULT_TYPE_NAME_TO_FIELD: dict = {
+    'Material': FieldType.MATERIAL,     'InxMaterial': FieldType.MATERIAL,
+    'Texture': FieldType.TEXTURE,       'TextureRef': FieldType.TEXTURE,
+    'Shader': FieldType.SHADER,         'ShaderRef': FieldType.SHADER,
+    'ShaderAssetInfo': FieldType.SHADER,
+    'AudioClip': FieldType.ASSET,       'AudioClipRef': FieldType.ASSET,
+}
+
+_VEC_ANNOTATION_MAP: dict = {
+    'Vec2': FieldType.VEC2,    'Vector2': FieldType.VEC2,    'vector2': FieldType.VEC2,
+    'Vec3': FieldType.VEC3,    'Vector3': FieldType.VEC3,    'vector3': FieldType.VEC3,
+    'vec4f': FieldType.VEC4,   'Vec4': FieldType.VEC4,
+    'Vector4': FieldType.VEC4, 'vector4': FieldType.VEC4,
+}
+
+
+def _make_vec_default(ft: FieldType):
+    from Infernux.lib._Infernux import Vector2, Vector3, vec4f
+    if ft == FieldType.VEC2:
+        return Vector2(0, 0)
+    if ft == FieldType.VEC3:
+        return Vector3(0, 0, 0)
+    if ft == FieldType.VEC4:
+        return vec4f(0, 0, 0, 0)
+    return None
+
+
 def _infer_field_type(python_type: Optional[Type], default: Any) -> FieldType:
     """Infer FieldType from Python type annotation or default value."""
     if python_type is not None:
+        # Direct type match (int, float, bool, str)
+        result = _DIRECT_TYPE_TO_FIELD.get(python_type)
+        if result is not None:
+            return result
+
+        # Name-based match (vectors, asset refs, etc.)
         type_name = getattr(python_type, '__name__', str(python_type))
-        
-        if python_type == int:
-            return FieldType.INT
-        elif python_type == float:
-            return FieldType.FLOAT
-        elif python_type == bool:
-            return FieldType.BOOL
-        elif python_type == str:
-            return FieldType.STRING
-        elif type_name in ('Vec2', 'Vector2', 'vector2'):
-            return FieldType.VEC2
-        elif type_name in ('Vec3', 'Vector3', 'vector3'):
-            return FieldType.VEC3
-        elif type_name in ('vec4f', 'Vec4', 'Vector4', 'vector4'):
-            return FieldType.VEC4
-        elif type_name == 'GameObject':
-            return FieldType.GAME_OBJECT
-        elif type_name == 'Material':
-            return FieldType.MATERIAL
-        elif type_name in ('Texture', 'TextureRef'):
-            return FieldType.TEXTURE
-        elif type_name in ('Shader', 'ShaderRef', 'ShaderAssetInfo'):
-            return FieldType.SHADER
-        elif type_name in ('AudioClip', 'AudioClipRef'):
-            return FieldType.ASSET
-        elif isinstance(python_type, type) and issubclass(python_type, Enum):
+        result = _TYPE_NAME_TO_FIELD.get(type_name)
+        if result is not None:
+            return result
+
+        if isinstance(python_type, type) and issubclass(python_type, Enum):
             return FieldType.ENUM
-        elif hasattr(python_type, '__origin__') and python_type.__origin__ in (list, tuple):
+        if hasattr(python_type, '__origin__') and python_type.__origin__ in (list, tuple):
             return FieldType.LIST
 
         # SerializableObject subclass detection
@@ -484,19 +560,17 @@ def _infer_field_type(python_type: Optional[Type], default: Any) -> FieldType:
             from .serializable_object import SerializableObject as _SO
             if isinstance(python_type, type) and issubclass(python_type, _SO):
                 return FieldType.SERIALIZABLE_OBJECT
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
-
-        # ComponentRef detection
-        if type_name == 'ComponentRef':
-            return FieldType.COMPONENT
 
         # InxComponent subclass → COMPONENT (e.g. ``text: UIText``)
         try:
             from .component import InxComponent as _IC
             if isinstance(python_type, type) and issubclass(python_type, _IC) and python_type is not _IC:
                 return FieldType.COMPONENT
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
 
     # Infer from default value
@@ -506,7 +580,8 @@ def _infer_field_type(python_type: Optional[Type], default: Any) -> FieldType:
             from .serializable_object import SerializableObject as _SO
             if isinstance(default, _SO):
                 return FieldType.SERIALIZABLE_OBJECT
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
 
         # ComponentRef instance
@@ -514,40 +589,35 @@ def _infer_field_type(python_type: Optional[Type], default: Any) -> FieldType:
             from .ref_wrappers import ComponentRef
             if isinstance(default, ComponentRef):
                 return FieldType.COMPONENT
-        except ImportError:
+        except ImportError as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
 
+        # Order matters: Enum before int (IntEnum is both), bool before int
         if isinstance(default, Enum):
-            # Check Enum before int — IntEnum is both int and Enum
             return FieldType.ENUM
-        elif isinstance(default, bool):
+        if isinstance(default, bool):
             return FieldType.BOOL
-        elif isinstance(default, int):
-            # Python int -> INT (5 is int, 5.0 is float)
+        if isinstance(default, int):
             return FieldType.INT
-        elif isinstance(default, float):
+        if isinstance(default, float):
             return FieldType.FLOAT
-        elif isinstance(default, str):
+        if isinstance(default, str):
             return FieldType.STRING
-        elif hasattr(default, 'x') and hasattr(default, 'y') and hasattr(default, 'z') and hasattr(default, 'w'):
-            return FieldType.VEC4
-        elif hasattr(default, 'x') and hasattr(default, 'y') and hasattr(default, 'z'):
-            return FieldType.VEC3
-        elif hasattr(default, 'x') and hasattr(default, 'y'):
+        if hasattr(default, 'x') and hasattr(default, 'y'):
+            if hasattr(default, 'z') and hasattr(default, 'w'):
+                return FieldType.VEC4
+            if hasattr(default, 'z'):
+                return FieldType.VEC3
             return FieldType.VEC2
-        elif isinstance(default, (list, tuple)):
+        if isinstance(default, (list, tuple)):
             return FieldType.LIST
-        # Check asset ref types by class name (avoids circular import)
-        default_type_name = type(default).__name__
-        if default_type_name in ('Material', 'InxMaterial'):
-            return FieldType.MATERIAL
-        if default_type_name in ('Texture', 'TextureRef'):
-            return FieldType.TEXTURE
-        elif default_type_name in ('Shader', 'ShaderRef', 'ShaderAssetInfo'):
-            return FieldType.SHADER
-        elif default_type_name in ('AudioClip', 'AudioClipRef'):
-            return FieldType.ASSET
-    
+
+        # Asset ref types by class name (avoids circular import)
+        result = _DEFAULT_TYPE_NAME_TO_FIELD.get(type(default).__name__)
+        if result is not None:
+            return result
+
     return FieldType.UNKNOWN
 
 
@@ -599,6 +669,9 @@ def resolve_annotation(annotation) -> Optional['FieldMetadata']:
             return None
 
         simple_name = text.split('.')[-1]
+        _vec_ft = _VEC_ANNOTATION_MAP.get(simple_name)
+        if _vec_ft is not None:
+            return FieldMetadata(name="", field_type=_vec_ft, default=_make_vec_default(_vec_ft))
         if simple_name in {
             'GameObject', 'Material', 'Texture', 'TextureRef',
             'Shader', 'ShaderRef', 'AudioClip', 'AudioClipRef', 'ComponentRef'
@@ -610,7 +683,8 @@ def resolve_annotation(annotation) -> Optional['FieldMetadata']:
             resolved = get_type(simple_name)
             if resolved is not None:
                 return resolve_annotation(resolved)
-        except Exception:
+        except Exception as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             pass
         return None
 
@@ -646,6 +720,11 @@ def resolve_annotation(annotation) -> Optional['FieldMetadata']:
     if annotation is str:
         return FieldMetadata(name="", field_type=FieldType.STRING, default="")
 
+    # ── Vector types ──
+    _vec_ft = _VEC_ANNOTATION_MAP.get(type_name)
+    if _vec_ft is not None:
+        return FieldMetadata(name="", field_type=_vec_ft, default=_make_vec_default(_vec_ft))
+
     # ── InxComponent subclass → ComponentRef ──
     try:
         from .component import InxComponent as _IC
@@ -657,7 +736,8 @@ def resolve_annotation(annotation) -> Optional['FieldMetadata']:
                 default=ComponentRef(component_type=type_name),
                 component_type=type_name,
             )
-    except ImportError:
+    except ImportError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         pass
 
     # ── Known reference / asset types ──

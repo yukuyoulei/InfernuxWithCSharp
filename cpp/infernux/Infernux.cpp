@@ -315,7 +315,13 @@ void Infernux::InitRenderer(int width, int height, const std::string &projectPat
                                [](const std::string &dependentGuid, const std::string & /*matGuid*/, AssetEvent event) {
                                    if (event != AssetEvent::Deleted)
                                        return;
-                                   auto *comp = Component::FindByInstanceGuid(dependentGuid);
+                                   uint64_t compId = 0;
+                                   try {
+                                       compId = std::stoull(dependentGuid);
+                                   } catch (...) {
+                                       return;
+                                   }
+                                   auto *comp = Component::FindByComponentId(compId);
                                    if (!comp)
                                        return;
                                    auto *mr = dynamic_cast<MeshRenderer *>(comp);
@@ -329,7 +335,13 @@ void Infernux::InitRenderer(int width, int height, const std::string &projectPat
 
         graph.RegisterCallback(ResourceType::Mesh, [](const std::string &dependentGuid,
                                                       const std::string & /*meshGuid*/, AssetEvent event) {
-            auto *comp = Component::FindByInstanceGuid(dependentGuid);
+            uint64_t compId = 0;
+            try {
+                compId = std::stoull(dependentGuid);
+            } catch (...) {
+                return;
+            }
+            auto *comp = Component::FindByComponentId(compId);
             if (!comp)
                 return;
             auto *mr = dynamic_cast<MeshRenderer *>(comp);
@@ -835,6 +847,11 @@ std::string Infernux::ReloadShader(const std::string &shaderPath)
 
     // Re-register meta (updates shader_id annotations from source)
     adb->ModifyResource(shaderPath);
+
+    // Invalidate shader-id map cache for this directory so shading models
+    // and imports added/modified since the last compile are discovered.
+    InxShaderLoader::InvalidateDirectoryCache(FromFsPath(ToFsPath(shaderPath).parent_path()));
+
     if (guid.empty()) {
         guid = adb->RegisterResource(shaderPath, ResourceType::Shader);
     } else {

@@ -27,6 +27,7 @@ from .closable_panel import ClosablePanel
 from .panel_registry import editor_panel
 from .theme import Theme, ImGuiCol
 from .viewport_utils import capture_viewport_info
+from Infernux.debug import Debug
 
 _sort_by_sort_order = attrgetter('sort_order')
 
@@ -87,6 +88,11 @@ class GameViewPanel(EditorPanel):
         self._fps_accum_frames = 0
         self._display_fps = 0.0
         self._display_frame_ms = 0.0
+        # Game-only FPS (excludes editor panel overhead)
+        self._game_fps_accum_time = 0.0
+        self._game_fps_accum_frames = 0
+        self._display_game_fps = 0.0
+        self._display_game_frame_ms = 0.0
 
     def _set_game_render_active(self, active: bool) -> None:
         """Keep C++ game rendering in lockstep with actual panel visibility.
@@ -171,7 +177,8 @@ class GameViewPanel(EditorPanel):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 cp.read_string(f.read())
-        except (OSError, configparser.Error):
+        except (OSError, configparser.Error) as _exc:
+            Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
             return
         if "GameView" not in cp:
             return
@@ -239,6 +246,12 @@ class GameViewPanel(EditorPanel):
         self._was_focused = False
         Input.set_game_focused(False)
         self._ui_event_processor.reset()
+        # Disable game rendering when the panel is invisible (e.g. another
+        # tab like UI Editor covers this dock).  Without this, C++ keeps
+        # submitting draw commands against a stale game render target, which
+        # can trigger VK_ERROR_DEVICE_LOST.  Rendering is re-enabled in
+        # on_render_content() once the panel becomes visible again.
+        self._set_game_render_active(False)
 
     def _on_visible_pre(self, ctx):
         focused = (ClosablePanel.get_active_panel_id() == self.window_id) or ctx.is_window_focused(0)
@@ -252,15 +265,21 @@ class GameViewPanel(EditorPanel):
             ctx.label(t("game_view.engine_not_init"))
             return
 
-        viewport_hovered = False
-        viewport_clicked = False
-
         # Ensure native Game rendering is enabled once the panel has rendered.
         # Do not disable it on transient dock/tab invisibility because scene
         # switches can temporarily interrupt panel visibility for a frame.
         self._set_game_render_active(True)
 
-        # ── Resolution toolbar row ──
+        self._render_resolution_toolbar(ctx)
+        target_w, target_h, fit_scale = self._render_scale_toolbar(ctx)
+        self._render_fps_counter(ctx)
+
+        ctx.new_line()
+
+        self._render_game_viewport(ctx, target_w, target_h, fit_scale)
+
+    def _render_resolution_toolbar(self, ctx):
+        """Resolution preset combo and optional custom width/height inputs."""
         old_idx = self._selected_resolution_idx
         ctx.set_next_item_width(140)
         self._selected_resolution_idx = ctx.combo("##Resolution", self._selected_resolution_idx, self._PRESET_NAMES, -1)
@@ -281,7 +300,11 @@ class GameViewPanel(EditorPanel):
             if self._custom_width != w_old or self._custom_height != h_old:
                 self._save_resolution_settings()
 
-        # ── Scale slider row ──
+    def _render_scale_toolbar(self, ctx):
+        """Scale slider, percentage label, and Fit button.
+
+        Returns ``(target_w, target_h, fit_scale)``.
+        """
         avail_width = ctx.get_content_region_avail_width()
         avail_height = ctx.get_content_region_avail_height()
         target_w, target_h = self._current_target_resolution()
@@ -315,16 +338,28 @@ class GameViewPanel(EditorPanel):
         if pushed_fit_style:
             ctx.pop_style_color(1)
 
-        # ── FPS counter (right-aligned) ──
+        return target_w, target_h, fit_scale
+
+    def _render_fps_counter(self, ctx):
+        """FPS counter (right-aligned, Unity-style)."""
         dt = Time.unscaled_delta_time
+        game_dt = Time.game_delta_time
         if dt > 0.0:
             self._fps_accum_time += dt
             self._fps_accum_frames += 1
+            if game_dt > 0.0:
+                self._game_fps_accum_time += game_dt
+                self._game_fps_accum_frames += 1
             if self._fps_accum_time >= 1.0:
                 self._display_fps = self._fps_accum_frames / self._fps_accum_time
                 self._display_frame_ms = (self._fps_accum_time / self._fps_accum_frames) * 1000.0
                 self._fps_accum_time = 0.0
                 self._fps_accum_frames = 0
+                if self._game_fps_accum_frames > 0 and self._game_fps_accum_time > 0.0:
+                    self._display_game_frame_ms = (self._game_fps_accum_time / self._game_fps_accum_frames) * 1000.0
+                    self._display_game_fps = 1000.0 / self._display_game_frame_ms
+                self._game_fps_accum_time = 0.0
+                self._game_fps_accum_frames = 0
 
         fps_text = f"FPS: {self._display_fps:.0f} ({self._display_frame_ms:.1f} ms)"
         if fps_text != getattr(self, '_cached_fps_text', None):
@@ -336,8 +371,43 @@ class GameViewPanel(EditorPanel):
             ctx.same_line(fps_x)
             ctx.label(fps_text)
 
-        ctx.new_line()
+    def _route_game_input(self, ctx, target_w, target_h,
+                          viewport_hovered, viewport_clicked, canvases):
+        """Handle focus, cursor lock, and UI event routing after viewport render."""
+        if viewport_clicked:
+            self._activate_panel(ctx, focus_window=True)
 
+        is_playing = self._is_playing()
+        panel_focused = (ClosablePanel.get_active_panel_id() == self.window_id) or ctx.is_window_focused(0)
+
+        cursor_locked = Input.is_cursor_locked()
+        if cursor_locked:
+            if Input.get_key_down(KeyCode.ESCAPE):
+                Input.set_cursor_locked(False)
+                cursor_locked = False
+
+        Input.set_game_focused(
+            should_route_game_input(
+                is_playing=is_playing,
+                panel_focused=panel_focused,
+                cursor_locked=cursor_locked,
+            )
+        )
+
+        if not is_playing and cursor_locked:
+            Input.set_cursor_locked(False)
+
+        if should_process_game_ui_events(
+            is_playing=is_playing,
+            viewport_hovered=viewport_hovered,
+            cursor_locked=cursor_locked,
+        ):
+            self._process_ui_events(target_w, target_h, canvases=canvases)
+        else:
+            self._ui_event_processor.reset()
+
+    def _render_game_viewport(self, ctx, target_w, target_h, fit_scale):
+        """Render the game texture, screen UI, and route input events."""
         # Recompute fit after the toolbar row has consumed layout height.
         viewport_avail_width = ctx.get_content_region_avail_width()
         viewport_avail_height = ctx.get_content_region_avail_height()
@@ -410,39 +480,8 @@ class GameViewPanel(EditorPanel):
                 ctx.label("  " + t("game_view.create_camera_hint_2"))
         ctx.end_child()
 
-        if viewport_clicked:
-            self._activate_panel(ctx, focus_window=True)
-
-        is_playing = self._is_playing()
-        panel_focused = (ClosablePanel.get_active_panel_id() == self.window_id) or ctx.is_window_focused(0)
-
-        # Cursor lock is script-driven (Input.set_cursor_locked).
-        # Editor provides ESC as a safety unlock.
-        cursor_locked = Input.is_cursor_locked()
-        if cursor_locked:
-            if Input.get_key_down(KeyCode.ESCAPE):
-                Input.set_cursor_locked(False)
-                cursor_locked = False
-
-        Input.set_game_focused(
-            should_route_game_input(
-                is_playing=is_playing,
-                panel_focused=panel_focused,
-                cursor_locked=cursor_locked,
-            )
-        )
-
-        if not is_playing and cursor_locked:
-            Input.set_cursor_locked(False)
-
-        if should_process_game_ui_events(
-            is_playing=is_playing,
-            viewport_hovered=viewport_hovered,
-            cursor_locked=cursor_locked,
-        ):
-            self._process_ui_events(target_w, target_h, canvases=_canvases)
-        else:
-            self._ui_event_processor.reset()
+        self._route_game_input(ctx, target_w, target_h,
+                               viewport_hovered, viewport_clicked, _canvases)
 
     # ------------------------------------------------------------------
     # Screen-space UI overlay
@@ -471,10 +510,7 @@ class GameViewPanel(EditorPanel):
             return
 
         renderer = self._engine.get_screen_ui_renderer()
-        if renderer is None:
-            return
-
-        if scene is None:
+        if renderer is None or scene is None:
             return
 
         game_w = self._last_game_width
@@ -498,73 +534,74 @@ class GameViewPanel(EditorPanel):
         _get_tid = _get_tex_cache().get_bound(self._engine)
 
         for canvas in canvases:
-            # Skip inactive canvas GameObjects
-            canvas_go = canvas.game_object
-            if canvas_go is not None and not canvas_go.active_in_hierarchy:
+            self._render_canvas_screen_ui(
+                ctx, canvas, renderer, use_overlay, _get_tid,
+                game_w, game_h, vp_x, vp_y, vp_w, vp_h,
+                ScreenUIList, RenderMode)
+
+    def _render_canvas_screen_ui(self, ctx, canvas, renderer, use_overlay,
+                                 _get_tid, game_w, game_h,
+                                 vp_x, vp_y, vp_w, vp_h,
+                                 ScreenUIList, RenderMode):
+        """Render all elements of one canvas to the screen UI renderer."""
+        canvas_go = canvas.game_object
+        if canvas_go is not None and not canvas_go.active_in_hierarchy:
+            return
+        if not getattr(canvas, 'enabled', True):
+            return
+
+        if canvas.render_mode == RenderMode.CameraOverlay:
+            ui_list = ScreenUIList.Camera
+        elif canvas.render_mode == RenderMode.ScreenOverlay:
+            ui_list = ScreenUIList.Overlay
+        else:
+            return
+
+        ref_w = float(canvas.reference_width)
+        ref_h = float(canvas.reference_height)
+        if ref_w < 1 or ref_h < 1:
+            return
+
+        scale_x, scale_y, text_scale = canvas.compute_scale(float(game_w), float(game_h))
+        offset_x = (float(game_w) - ref_w * scale_x) * 0.5
+        offset_y = (float(game_h) - ref_h * scale_y) * 0.5
+
+        for elem in canvas._get_elements():
+            elem_go = elem.game_object
+            if elem_go is not None and not elem_go.active_in_hierarchy:
                 continue
-            if not getattr(canvas, 'enabled', True):
+            if not getattr(elem, 'enabled', True):
                 continue
 
-            # Map RenderMode to ScreenUIList
-            if canvas.render_mode == RenderMode.CameraOverlay:
-                ui_list = ScreenUIList.Camera
-            elif canvas.render_mode == RenderMode.ScreenOverlay:
-                ui_list = ScreenUIList.Overlay
+            ex, ey, ew, eh = elem.get_rect(ref_w, ref_h)
+
+            if use_overlay:
+                ovl_scale_x = vp_w / ref_w
+                ovl_scale_y = vp_h / ref_h
+                _ui_dispatch(
+                    elem, "editor",
+                    ctx=ctx,
+                    base_sx=vp_x + ex * ovl_scale_x,
+                    base_sy=vp_y + ey * ovl_scale_y,
+                    base_sw=ew * ovl_scale_x,
+                    base_sh=eh * ovl_scale_y,
+                    zoom=min(ovl_scale_x, ovl_scale_y),
+                    get_tex_id=_get_tid,
+                )
             else:
-                continue
-
-            ref_w = float(canvas.reference_width)
-            ref_h = float(canvas.reference_height)
-            if ref_w < 1 or ref_h < 1:
-                continue
-            # Use Unity-aligned CanvasScaler logic
-            scale_x, scale_y, text_scale = canvas.compute_scale(float(game_w), float(game_h))
-            # Center canvas in viewport when uniform scale doesn't fill screen
-            offset_x = (float(game_w) - ref_w * scale_x) * 0.5
-            offset_y = (float(game_h) - ref_h * scale_y) * 0.5
-
-            for elem in canvas._get_elements():
-                # Skip inactive / disabled elements
-                elem_go = elem.game_object
-                if elem_go is not None and not elem_go.active_in_hierarchy:
-                    continue
-                if not getattr(elem, 'enabled', True):
-                    continue
-
-                ex, ey, ew, eh = elem.get_rect(ref_w, ref_h)
-
-                if use_overlay:
-                    # ImGui overlay: map design coords → screen coords
-                    ovl_scale_x = vp_w / ref_w
-                    ovl_scale_y = vp_h / ref_h
-                    base_sx = vp_x + ex * ovl_scale_x
-                    base_sy = vp_y + ey * ovl_scale_y
-                    base_sw = ew * ovl_scale_x
-                    base_sh = eh * ovl_scale_y
-                    ovl_zoom = min(ovl_scale_x, ovl_scale_y)
-                    _ui_dispatch(
-                        elem, "editor",
-                        ctx=ctx,
-                        base_sx=base_sx, base_sy=base_sy,
-                        base_sw=base_sw, base_sh=base_sh,
-                        zoom=ovl_zoom,
-                        get_tex_id=_get_tid,
-                    )
-                else:
-                    sx = offset_x + ex * scale_x
-                    sy = offset_y + ey * scale_y
-                    sw = ew * scale_x
-                    sh = eh * scale_y
-                    _ui_dispatch(
-                        elem, "runtime",
-                        renderer=renderer,
-                        ui_list=ui_list,
-                        sx=sx, sy=sy, sw=sw, sh=sh,
-                        ref_w=ref_w, ref_h=ref_h,
-                        scale_x=scale_x, scale_y=scale_y,
-                        text_scale=text_scale,
-                        get_tex_id=_get_tid,
-                    )
+                _ui_dispatch(
+                    elem, "runtime",
+                    renderer=renderer,
+                    ui_list=ui_list,
+                    sx=offset_x + ex * scale_x,
+                    sy=offset_y + ey * scale_y,
+                    sw=ew * scale_x,
+                    sh=eh * scale_y,
+                    ref_w=ref_w, ref_h=ref_h,
+                    scale_x=scale_x, scale_y=scale_y,
+                    text_scale=text_scale,
+                    get_tex_id=_get_tid,
+                )
 
     # ------------------------------------------------------------------
     # UI event processing

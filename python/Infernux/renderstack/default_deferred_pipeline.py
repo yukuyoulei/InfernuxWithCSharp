@@ -181,10 +181,7 @@ class DefaultDeferredPipeline(RenderPipeline):
         add_transparent_pass(graph)
         graph.injection_point("after_transparent", resources=SCENE_RESOURCES)
 
-        # ---- ScreenUI + post-process injection points ----
-        add_standard_post_process_section(
-            graph,
-            enable_screen_ui=self.enable_screen_ui,
-        )
+        # ---- Post-process + ScreenUI injection points ----
+        add_standard_post_process_section(graph, enable_screen_ui=self.enable_screen_ui)
 
         graph.set_output(COLOR_TEXTURE)

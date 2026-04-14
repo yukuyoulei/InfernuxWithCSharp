@@ -1,6 +1,7 @@
 """Unity-style splash screen shown while the engine is loading."""
 
 import contextlib
+import logging
 import os
 import subprocess
 import sys
@@ -21,6 +22,17 @@ _WIN_CRASH_CODES = {
     -1073741571: "Stack overflow (0xC00000FD)",
     -1073741676: "Integer divide by zero (0xC0000094)",
     -1073741685: "Illegal instruction (0xC000001D)",
+}
+
+# Unix signal-based crash codes (negative signal number)
+_UNIX_CRASH_CODES = {
+    -6: "SIGABRT — Aborted",
+    -11: "SIGSEGV — Segmentation fault",
+    -4: "SIGILL — Illegal instruction",
+    -8: "SIGFPE — Floating point exception",
+    -5: "SIGTRAP — Trace/breakpoint trap",
+    -9: "SIGKILL — Killed",
+    -10: "SIGBUS — Bus error",
 }
 
 
@@ -48,7 +60,8 @@ def _suppress_windows_error_dialogs():
     finally:
         try:
             ctypes.windll.kernel32.SetErrorMode(previous_mode)
-        except Exception:
+        except Exception as _exc:
+            logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
             pass
 
 
@@ -56,6 +69,8 @@ def _format_exit_code(returncode: int) -> str:
     """Return a user-facing explanation for process exit codes."""
     if returncode in _WIN_CRASH_CODES:
         return f"{_WIN_CRASH_CODES[returncode]}\nRaw exit code: {returncode}"
+    if returncode in _UNIX_CRASH_CODES:
+        return f"{_UNIX_CRASH_CODES[returncode]}\nRaw exit code: {returncode}"
     return f"Raw exit code: {returncode}"
 
 
@@ -240,15 +255,15 @@ class EngineSplashScreen(QWidget):
 
         popen_kwargs: dict = {"cwd": project_path, "env": env}
 
-        # Engine has its own Console panel — never inherit stdout/stderr
-        # to the launcher terminal.  stderr is piped so we can display
-        # crash messages; a background thread drains it continuously to
-        # prevent the OS pipe-buffer from filling up and deadlocking the
-        # engine process.
-        popen_kwargs["stdin"] = subprocess.DEVNULL
-        popen_kwargs["stdout"] = subprocess.DEVNULL
-        popen_kwargs["stderr"] = subprocess.PIPE
         if detached:
+            # Engine has its own Console panel — never inherit stdout/stderr
+            # to the launcher terminal.  stderr is piped so we can display
+            # crash messages; a background thread drains it continuously to
+            # prevent the OS pipe-buffer from filling up and deadlocking the
+            # engine process.
+            popen_kwargs["stdin"] = subprocess.DEVNULL
+            popen_kwargs["stdout"] = subprocess.DEVNULL
+            popen_kwargs["stderr"] = subprocess.PIPE
             if sys.platform == "win32":
                 flags = 0
                 flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
@@ -256,6 +271,15 @@ class EngineSplashScreen(QWidget):
                 popen_kwargs["creationflags"] = flags
             else:
                 popen_kwargs["start_new_session"] = True
+        else:
+            # Dev mode — spawn a visible console so developers can read
+            # stdout/stderr directly.  stderr is still piped for the
+            # crash-message dialog.
+            popen_kwargs["stdin"] = subprocess.DEVNULL
+            popen_kwargs["stdout"] = None          # inherit → visible console
+            popen_kwargs["stderr"] = subprocess.PIPE
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
 
         try:
             with _suppress_windows_error_dialogs():
@@ -290,12 +314,14 @@ class EngineSplashScreen(QWidget):
                 if not chunk:
                     break
                 self._stderr_chunks.append(chunk)
-        except (ValueError, OSError):
+        except (ValueError, OSError) as _exc:
+            logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
             pass
         finally:
             try:
                 proc.stderr.close()
-            except Exception:
+            except Exception as _exc:
+                logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
                 pass
 
     def _poll_launch_state(self):
@@ -303,7 +329,8 @@ class EngineSplashScreen(QWidget):
             try:
                 with open(self._ready_file, "r", encoding="utf-8") as f:
                     content = f.read().strip()
-            except OSError:
+            except OSError as _exc:
+                logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
                 return
 
             # Race condition: writer may have truncated but not yet written.
@@ -324,7 +351,8 @@ class EngineSplashScreen(QWidget):
                     self._progress_bar.setValue(
                         int(int(current) * 100 / int(total))
                     )
-                except (ValueError, ZeroDivisionError):
+                except (ValueError, ZeroDivisionError) as _exc:
+                    logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
                     pass
             return
 
@@ -366,7 +394,8 @@ class EngineSplashScreen(QWidget):
         if self._ready_file:
             try:
                 os.remove(self._ready_file)
-            except OSError:
+            except OSError as _exc:
+                logging.getLogger(__name__).debug("[Suppressed] %s: %s", type(_exc).__name__, _exc)
                 pass
             self._ready_file = ""
         self.hide()

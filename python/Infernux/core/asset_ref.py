@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Optional
+from Infernux.debug import Debug
 
 _log = logging.getLogger("Infernux.ref")
 
@@ -22,14 +23,16 @@ def _get_asset_database():
         from Infernux.core.assets import AssetManager
         if AssetManager._asset_database is not None:
             return AssetManager._asset_database
-    except ImportError:
+    except ImportError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         pass
     try:
         from Infernux.engine.play_mode import PlayModeManager
         pm = PlayModeManager.instance()
         if pm and pm._asset_database is not None:
             return pm._asset_database
-    except ImportError:
+    except ImportError as _exc:
+        Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         pass
     return None
 
@@ -202,7 +205,8 @@ class MaterialRef(AssetRefBase):
                     g = db.get_guid_from_path(file_path)
                     if g:
                         return g
-                except Exception:
+                except Exception as _exc:
+                    Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
                     pass
         return ""
 
@@ -220,8 +224,10 @@ class MaterialRef(AssetRefBase):
 
     def _do_resolve(self):
         if not self._guid and not self._path_hint:
-            self._cached = None
-            return None
+            # Runtime-created materials (e.g. via Clone/Instantiate) have no
+            # GUID or path.  Keep the cached reference alive instead of
+            # discarding it — there is no asset database entry to re-resolve.
+            return self._cached
         # Primary: load by GUID through AssetManager
         if self._guid:
             try:
@@ -262,6 +268,26 @@ class MaterialRef(AssetRefBase):
                 _log.warning("MaterialRef.resolve by path_hint failed: %s", exc)
         self._cached = None
         return None
+
+    def __bool__(self):
+        """True if the ref points to a valid material (asset or runtime)."""
+        return bool(self._guid) or self._cached is not None
+
+    @property
+    def display_name(self) -> str:
+        if self._path_hint:
+            return os.path.basename(self._path_hint)
+        if self._guid:
+            return f"GUID:{self._guid[:8]}\u2026"
+        # Runtime material — use its name directly
+        mat = self._cached
+        if mat is not None:
+            try:
+                native = getattr(mat, "native", mat)
+                return native.name or "(Runtime Material)"
+            except Exception:
+                pass
+        return "None"
 
     def __getattr__(self, name: str) -> Any:
         """Forward attribute access to the underlying Material."""
