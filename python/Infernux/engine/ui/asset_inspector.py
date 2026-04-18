@@ -26,7 +26,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from Infernux.lib import InxGUIContext
 from Infernux.engine.i18n import t
 from Infernux.core.asset_types import (
+    FilterMode,
+    SpriteFrame,
     TextureType,
+    TextureImportSettings,
+    WrapMode,
     ShaderAssetInfo,
     FontAssetInfo,
     read_meta_file,
@@ -181,13 +185,23 @@ def _ensure_categories():
             FieldDef("texture_type", "asset.texture_type", WidgetType.COMBO,
                      [("asset.tex_default", TextureType.DEFAULT),
                       ("asset.tex_normalmap", TextureType.NORMAL_MAP),
-                      ("asset.tex_ui", TextureType.UI)]),
+                      ("asset.tex_ui", TextureType.UI),
+                      ("asset.tex_sprite", TextureType.SPRITE)]),
             FieldDef("srgb", "asset.srgb", WidgetType.CHECKBOX),
+            FieldDef("filter_mode", "asset.filter_mode", WidgetType.COMBO,
+                     [("asset.filter_point", FilterMode.POINT),
+                      ("asset.filter_bilinear", FilterMode.BILINEAR),
+                      ("asset.filter_trilinear", FilterMode.TRILINEAR)]),
+            FieldDef("wrap_mode", "asset.wrap_mode", WidgetType.COMBO,
+                     [("asset.wrap_repeat", WrapMode.REPEAT),
+                      ("asset.wrap_clamp", WrapMode.CLAMP),
+                      ("asset.wrap_mirror", WrapMode.MIRROR)]),
             FieldDef("max_size", "asset.max_size", WidgetType.COMBO,
                      [(str(s), s) for s in
                       (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192)]),
         ],
         custom_header_fn=_render_texture_preview,
+        custom_body_fn=_render_sprite_body,
     )
 
     # ── Audio ──────────────────────────────────────────────────────────
@@ -251,6 +265,24 @@ def _ensure_categories():
         access_mode=AssetAccessMode.READ_WRITE_RESOURCE,
         load_fn=_load_prefab,
         custom_body_fn=_render_prefab_body,
+        autosave_debounce=0.5,
+    )
+
+    # ── Animation Clip ─────────────────────────────────────────────────
+    _categories["animclip"] = AssetCategoryDef(
+        display_name="asset.display_animclip",
+        access_mode=AssetAccessMode.READ_WRITE_RESOURCE,
+        load_fn=_load_animclip,
+        custom_body_fn=_render_animclip_body,
+        autosave_debounce=0.5,
+    )
+
+    # ── Animation State Machine ────────────────────────────────────────
+    _categories["animfsm"] = AssetCategoryDef(
+        display_name="asset.display_animfsm",
+        access_mode=AssetAccessMode.READ_WRITE_RESOURCE,
+        load_fn=_load_animfsm,
+        custom_body_fn=_render_animfsm_body,
         autosave_debounce=0.5,
     )
 
@@ -462,6 +494,434 @@ def _render_prefab_root_summary(ctx: InxGUIContext, root: dict):
     ctx.label(f"{t('asset.prefab_children_count')}: {len(root.get('children', []))}")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Animation Clip loader & body
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _load_animclip(path: str):
+    from Infernux.core.animation_clip import AnimationClip
+    clip = AnimationClip.load(path)
+    if clip is None:
+        return None
+    return clip, {"clip_path": path}
+
+
+def _render_animclip_body(ctx: InxGUIContext, panel, state: _State):
+    from Infernux.core.animation_clip import AnimationClip
+    from .inspector_utils import render_compact_section_header, render_info_text
+    from .inspector_components import render_object_field
+
+    clip: AnimationClip = state.settings
+    if not isinstance(clip, AnimationClip):
+        ctx.label(t("asset.invalid_animclip"))
+        return
+
+    labels = [
+        t("asset.animclip_name"),
+        t("asset.animclip_texture"),
+        t("asset.animclip_preview_texture"),
+        t("asset.animclip_fps"),
+        t("asset.animclip_frames"),
+    ]
+    lw = max_label_w(ctx, labels)
+
+    ctx.dummy(0, 4)
+
+    # ── Clip name (read-only, derived from filename) ───────────
+    clip_display_name = os.path.splitext(os.path.basename(state.file_path))[0] if state.file_path else clip.name
+    field_label(ctx, t("asset.animclip_name"), lw)
+    ctx.begin_disabled(True)
+    ctx.text_input("##animclip_name", clip_display_name, 256)
+    ctx.end_disabled()
+
+    # ── Authoring texture reference (read-only) ────────────────
+    authoring_path = _resolve_authoring_texture_path(clip)
+    if authoring_path:
+        display = os.path.basename(authoring_path)
+    elif clip.authoring_texture_guid:
+        display = "(missing) " + clip.authoring_texture_guid[:8] + "…"
+    elif clip.authoring_texture_path:
+        display = "(missing) " + os.path.basename(clip.authoring_texture_path)
+    else:
+        display = "None (Texture)"
+
+    field_label(ctx, t("asset.animclip_texture"), lw)
+    ctx.begin_disabled(True)
+    render_object_field(ctx, "##animclip_texture", display, "Texture")
+    ctx.end_disabled()
+
+    # ── Preview texture override (drag-droppable) ──────────────
+    preview_override = state.extra.get("_animclip_preview_override_path", "")
+    if preview_override:
+        pv_display = os.path.basename(preview_override)
+    else:
+        pv_display = "None (use authoring)"
+
+    field_label(ctx, t("asset.animclip_preview_texture"), lw)
+    render_object_field(ctx, "##animclip_pv_tex", pv_display, "Texture")
+
+    # Accept TEXTURE_FILE drop for preview override
+    from .igui import IGUI
+    def _on_preview_texture_drop(payload):
+        tex_path = str(payload) if payload else ""
+        if tex_path and os.path.isfile(tex_path):
+            state.extra["_animclip_preview_override_path"] = tex_path
+            # Clear cached preview texture so it reloads
+            state.extra.pop("_animclip_pv", None)
+
+    IGUI.drop_target(ctx, "TEXTURE_FILE", _on_preview_texture_drop)
+
+    # Clear button for preview override
+    if preview_override:
+        ctx.same_line(0, 4)
+        def _clear_preview():
+            state.extra.pop("_animclip_preview_override_path", None)
+            state.extra.pop("_animclip_pv", None)
+        ctx.button("X##clear_pv_tex", _clear_preview, width=22, height=22)
+
+    # ── FPS (editable) ─────────────────────────────────────────
+    changed = False
+    field_label(ctx, t("asset.animclip_fps"), lw)
+    new_fps = ctx.drag_float("##animclip_fps", clip.fps, 0.1, 0.1, 120.0)
+    if new_fps != clip.fps:
+        clip.fps = max(0.1, new_fps)
+        changed = True
+
+    ctx.separator()
+
+    # ── Preview ────────────────────────────────────────────────
+    _render_animclip_preview(ctx, clip, state)
+
+    ctx.separator()
+
+    # ── Frame indices (read-only) ──────────────────────────────
+    if render_compact_section_header(ctx, t("asset.animclip_frames")):
+        frame_count = clip.frame_count
+        duration = clip.duration
+        ctx.push_style_color(ImGuiCol.Text, *Theme.META_TEXT)
+        ctx.label(t("asset.animclip_frame_count").format(count=frame_count))
+        ctx.label(t("asset.animclip_duration").format(duration=f"{duration:.3f}"))
+        ctx.pop_style_color(1)
+
+        ctx.dummy(0, 4)
+
+        frame_str = ", ".join(str(i) for i in clip.frame_indices)
+        field_label(ctx, t("asset.animclip_sequence"), lw)
+        ctx.begin_disabled(True)
+        ctx.text_input("##animclip_frame_seq", frame_str, 2048)
+        ctx.end_disabled()
+
+    ctx.separator()
+
+    # ── Auto-save (only FPS changes) ──────────────────────────
+    if changed and state.exec_layer:
+        clip.file_path = state.file_path
+        state.exec_layer.schedule_rw_save(clip)
+
+
+def _resolve_authoring_texture_path(clip) -> str:
+    """Resolve the actual file path for the clip's authoring texture."""
+    if clip.authoring_texture_path and os.path.isfile(clip.authoring_texture_path):
+        return clip.authoring_texture_path
+    if clip.authoring_texture_guid:
+        try:
+            from Infernux.engine.bootstrap import EditorBootstrap
+            adb = EditorBootstrap.instance().engine.get_asset_database()
+            if adb:
+                p = adb.get_path_from_guid(clip.authoring_texture_guid)
+                if p and os.path.isfile(p):
+                    return p
+        except Exception:
+            pass
+    return ""
+
+
+def _ensure_animclip_preview_texture(state: _State, tex_file: str) -> bool:
+    """Upload the sprite-sheet texture for the animclip inspector preview."""
+    from Infernux.debug import Debug
+
+    pv = state.extra.get("_animclip_pv")
+    if pv and pv.get("file") == tex_file and pv.get("tex_id"):
+        return True
+
+    if not tex_file:
+        return False
+
+    try:
+        from Infernux.lib import TextureLoader
+        td = TextureLoader.load_from_file(tex_file)
+        if not td or td.width <= 0 or not td.is_valid():
+            return False
+    except Exception:
+        return False
+
+    try:
+        from Infernux.engine.ui.editor_services import EditorServices
+        svc = EditorServices.instance()
+        native = svc.native_engine if svc else None
+        if not native:
+            return False
+
+        cache_name = f"__animclip_insp__{os.path.normpath(tex_file)}"
+        if native.has_imgui_texture(cache_name):
+            tex_id = native.get_imgui_texture_id(cache_name)
+        else:
+            pixels = td.get_pixels_list()
+            use_nearest = False
+            try:
+                from Infernux.core.asset_types import read_texture_import_settings, FilterMode
+                settings = read_texture_import_settings(tex_file)
+                use_nearest = (getattr(settings, 'filter_mode', None) == FilterMode.POINT)
+            except Exception:
+                pass
+            tex_id = native.upload_texture_for_imgui(cache_name, list(pixels), td.width, td.height, nearest=use_nearest)
+
+        if not tex_id:
+            return False
+
+        # Read sprite frames
+        frames = []
+        try:
+            from Infernux.core.asset_types import read_texture_import_settings, SpriteFrame
+            settings = read_texture_import_settings(tex_file)
+            if settings.sprite_frames:
+                frames = list(settings.sprite_frames)
+        except Exception:
+            pass
+        if not frames:
+            from Infernux.core.asset_types import SpriteFrame
+            frames = [SpriteFrame(name="frame_0", x=0, y=0, w=td.width, h=td.height)]
+
+        state.extra["_animclip_pv"] = {
+            "file": tex_file, "tex_id": tex_id,
+            "tex_w": td.width, "tex_h": td.height, "frames": frames,
+        }
+        return True
+    except Exception as exc:
+        Debug.log_warning(f"[AnimClipPreview] {exc}")
+        return False
+
+
+def _render_animclip_preview(ctx: InxGUIContext, clip, state: _State):
+    """Render an animated preview of the animation clip in the inspector."""
+    import time as _time
+
+    # Use preview override if set, otherwise fall back to authoring texture
+    preview_override = state.extra.get("_animclip_preview_override_path", "")
+    if preview_override and os.path.isfile(preview_override):
+        tex_file = preview_override
+    else:
+        tex_file = _resolve_authoring_texture_path(clip)
+
+    if not tex_file:
+        from .inspector_utils import render_info_text
+        if clip.authoring_texture_guid or clip.authoring_texture_path:
+            render_info_text(ctx, t("asset.animclip_texture_missing"))
+        return
+
+    if not clip.frame_indices:
+        return
+
+    if not _ensure_animclip_preview_texture(state, tex_file):
+        return
+
+    pv = state.extra.get("_animclip_pv")
+    if not pv:
+        return
+
+    tex_id = pv["tex_id"]
+    tex_w = pv["tex_w"]
+    tex_h = pv["tex_h"]
+    frames = pv["frames"]
+    fc = len(clip.frame_indices)
+
+    # Playback state in state.extra
+    pb = state.extra.get("_animclip_pb")
+    if pb is None:
+        pb = {"playing": False, "frame_idx": 0, "last_time": 0.0}
+        state.extra["_animclip_pb"] = pb
+
+    # Transport: Play/Pause + frame counter
+    is_playing = pb["playing"]
+    if is_playing:
+        if ctx.button(t("animclip_editor.pause") + "##insp_transport"):
+            pb["playing"] = False
+    else:
+        if ctx.button(t("animclip_editor.play") + "##insp_transport"):
+            pb["playing"] = True
+            pb["last_time"] = _time.perf_counter()
+            if pb["frame_idx"] >= fc:
+                pb["frame_idx"] = 0
+
+    ctx.same_line(0, 8)
+    ctx.push_style_color(ImGuiCol.Text, *Theme.META_TEXT)
+    ctx.label(f"{pb['frame_idx'] + 1}/{fc}")
+    ctx.pop_style_color(1)
+
+    # Advance frame
+    if pb["playing"] and clip.fps > 0:
+        now = _time.perf_counter()
+        elapsed = now - pb["last_time"]
+        interval = 1.0 / clip.fps
+        if elapsed >= interval:
+            steps = int(elapsed / interval)
+            pb["frame_idx"] += steps
+            pb["last_time"] = now
+            if pb["frame_idx"] >= fc:
+                pb["frame_idx"] = pb["frame_idx"] % fc
+
+    fi = max(0, min(pb["frame_idx"], fc - 1))
+    src_idx = clip.frame_indices[fi]
+    if src_idx < 0 or src_idx >= len(frames):
+        return
+
+    frame = frames[src_idx]
+    uv0_x = frame.x / max(tex_w, 1)
+    uv0_y = frame.y / max(tex_h, 1)
+    uv1_x = (frame.x + frame.w) / max(tex_w, 1)
+    uv1_y = (frame.y + frame.h) / max(tex_h, 1)
+
+    # Fit into available width, max 200px
+    avail_w = ctx.get_content_region_avail_width()
+    max_dim = min(200.0, avail_w - 16.0)
+    aspect = frame.w / max(frame.h, 1)
+    if aspect >= 1.0:
+        pw = max_dim
+        ph = max_dim / aspect
+    else:
+        ph = max_dim
+        pw = max_dim * aspect
+
+    # Center horizontally
+    pad_x = (avail_w - pw) * 0.5
+    if pad_x > 0:
+        ctx.set_cursor_pos_x(ctx.get_cursor_pos_x() + pad_x)
+
+    ctx.image(tex_id, pw, ph, uv0_x, uv0_y, uv1_x, uv1_y)
+
+
+def _render_animclip_quickfill(ctx: InxGUIContext, clip, state: _State):
+    """Render quick-fill buttons: generate sequential frame range from sprite sheet."""
+    from .inspector_utils import render_info_text
+
+    # Try to get frame count from the referenced texture's sprite_frames
+    sprite_frame_count = _get_sprite_frame_count(
+        clip.authoring_texture_guid, clip.authoring_texture_path)
+
+    ctx.dummy(0, 2)
+    if sprite_frame_count > 0:
+        ctx.push_style_color(ImGuiCol.Text, *Theme.META_TEXT)
+        ctx.label(t("asset.animclip_sprite_frames_available").format(count=sprite_frame_count))
+        ctx.pop_style_color(1)
+
+        def _fill_sequential():
+            clip.frame_indices = list(range(sprite_frame_count))
+            if state.exec_layer:
+                clip.file_path = state.file_path
+                state.exec_layer.schedule_rw_save(clip)
+
+        def _fill_pingpong():
+            fwd = list(range(sprite_frame_count))
+            rev = list(range(sprite_frame_count - 2, 0, -1))
+            clip.frame_indices = fwd + rev
+            if state.exec_layer:
+                clip.file_path = state.file_path
+                state.exec_layer.schedule_rw_save(clip)
+
+        ctx.button(t("asset.animclip_fill_sequential"), _fill_sequential)
+        ctx.same_line()
+        ctx.button(t("asset.animclip_fill_pingpong"), _fill_pingpong)
+    else:
+        render_info_text(ctx, t("asset.animclip_no_texture_hint"))
+
+
+def _get_sprite_frame_count(texture_guid: str, texture_path: str = "") -> int:
+    path = ""
+    if texture_guid:
+        try:
+            from Infernux.engine.bootstrap import EditorBootstrap
+            adb = EditorBootstrap.instance().engine.get_asset_database()
+            if adb:
+                path = adb.get_path_from_guid(texture_guid) or ""
+        except Exception:
+            pass
+    if not path and texture_path:
+        path = texture_path
+    if not path:
+        return 0
+    try:
+        from Infernux.core.asset_types import read_texture_import_settings
+        settings = read_texture_import_settings(path)
+        return len(settings.sprite_frames)
+    except Exception:
+        return 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Animation State Machine inspector
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _load_animfsm(path: str):
+    from Infernux.core.anim_state_machine import AnimStateMachine
+    fsm = AnimStateMachine.load(path)
+    if fsm is None:
+        return None
+    return fsm, {"fsm_path": path}
+
+
+def _render_animfsm_body(ctx: InxGUIContext, panel, state: _State):
+    from Infernux.core.anim_state_machine import AnimStateMachine
+    from .inspector_utils import render_compact_section_header, field_label
+
+    fsm: AnimStateMachine = state.settings
+    if not isinstance(fsm, AnimStateMachine):
+        ctx.label(t("asset.invalid_animfsm"))
+        return
+
+    lw = 120.0
+
+    # Name (read-only)
+    field_label(ctx, t("animfsm_editor.name"), lw)
+    ctx.same_line()
+    ctx.label(fsm.name)
+
+    # Default state
+    field_label(ctx, t("asset.animfsm_default_state"), lw)
+    ctx.same_line()
+    ctx.label(fsm.default_state or "—")
+
+    # States section
+    if render_compact_section_header(ctx, t("animfsm_editor.states").format(count=fsm.state_count)):
+        for s in fsm.states:
+            is_default = (s.name == fsm.default_state)
+            prefix = "► " if is_default else "  "
+            ctx.label(f"{prefix}{s.name}")
+            clip_path = ""
+            if s.clip_guid:
+                try:
+                    from Infernux.engine.bootstrap import EditorBootstrap
+                    bs = EditorBootstrap.instance()
+                    adb = bs.engine.get_asset_database() if bs and bs.engine else None
+                    if adb:
+                        clip_path = adb.get_path_from_guid(s.clip_guid) or ""
+                except Exception:
+                    pass
+            if not clip_path:
+                clip_path = s.clip_path
+            if clip_path:
+                ctx.same_line()
+                ctx.label(f"  [{os.path.basename(clip_path)}]")
+            for tr in s.transitions:
+                ctx.label(f"      → {tr.target_state}")
+                if tr.condition:
+                    ctx.same_line()
+                    ctx.label(f"  ({tr.condition})")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Material inspector
+# ═══════════════════════════════════════════════════════════════════════════
+
 def _refresh_material(state: _State):
     native = state.extra.get("native_mat")
     if native:
@@ -585,6 +1045,7 @@ def render_asset_inspector(ctx: InxGUIContext, panel,
 def invalidate():
     """Reset all inspector state (called on selection change)."""
     _state.reset()
+    _sprite_state.reset()
 
 
 def invalidate_asset(path: str):
@@ -692,7 +1153,8 @@ def _render_import_fields(ctx: InxGUIContext, cat_def: AssetCategoryDef,
                 new_idx = ctx.combo(wid, idx, display_labels)
                 if new_idx != idx:
                     setattr(state.settings, fdef.key, values[new_idx])
-                    if hasattr(state.settings, '_sync_derived_fields'):
+                    # Only sync derived fields when texture_type itself changes
+                    if fdef.key == "texture_type" and hasattr(state.settings, '_sync_derived_fields'):
                         state.settings._sync_derived_fields()
 
             elif fdef.field_type == WidgetType.FLOAT:
@@ -764,6 +1226,363 @@ def _render_mesh_info(ctx: InxGUIContext, panel, state: _State):
         ctx.pop_style_color(1)
 
     ctx.separator()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sprite slice editor (SPRITE-mode custom body)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _SpriteEditorState:
+    """Persistent state for the sprite slice editor (one at a time)."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.file_path: str = ""
+        self.tex_w: int = 0
+        self.tex_h: int = 0
+        self.texture_id: int = 0
+        self.selected_frame: int = -1
+        self.slice_rows: int = 1
+        self.slice_cols: int = 1
+        self.drag_edge: str = ""  # "", "left", "right", "top", "bottom"
+        self.drag_frame_idx: int = -1
+
+
+_sprite_state = _SpriteEditorState()
+
+
+def _ensure_sprite_texture(state: _State) -> bool:
+    """Load the texture dimensions + ImGui texture ID for the sprite editor."""
+    from Infernux.debug import Debug
+
+    ss = _sprite_state
+    # Track sRGB + filter_mode so we re-upload when either changes
+    cur_srgb = getattr(state.settings, 'srgb', False)
+    cur_filter = getattr(state.settings, 'filter_mode', None)
+    if (ss.file_path == state.file_path and ss.tex_w > 0
+            and getattr(ss, '_srgb', None) == cur_srgb
+            and getattr(ss, '_filter', None) == cur_filter):
+        return True
+    # Preserve slice grid when only sRGB/filter changed for the same file
+    same_file = (ss.file_path == state.file_path)
+    saved_rows = ss.slice_rows if same_file else 1
+    saved_cols = ss.slice_cols if same_file else 1
+    # Remember the old cache name so we can remove it after successful re-upload
+    old_cache_name = getattr(ss, '_cache_name', "")
+    ss.reset()
+    ss.slice_rows = saved_rows
+    ss.slice_cols = saved_cols
+    ss.file_path = state.file_path
+    ss._srgb = cur_srgb
+    ss._filter = cur_filter
+
+    # Load texture data once
+    try:
+        from Infernux.lib import TextureLoader
+        td = TextureLoader.load_from_file(state.file_path)
+        if not td or td.width <= 0 or not td.is_valid():
+            Debug.log_warning(f"[SpriteEditor] TextureLoader failed for: {state.file_path}")
+            return False
+        ss.tex_w = td.width
+        ss.tex_h = td.height
+    except Exception as exc:
+        Debug.log_warning(f"[SpriteEditor] TextureLoader exception: {exc}")
+        return False
+
+    # Upload for ImGui preview
+    try:
+        from Infernux.engine.ui.editor_services import EditorServices
+        svc = EditorServices.instance()
+        native = svc.native_engine if svc else None
+        if not native:
+            Debug.log_warning("[SpriteEditor] No native engine via EditorServices")
+            return ss.tex_w > 0
+
+        filter_tag = cur_filter.name if cur_filter else "default"
+        srgb_tag = "srgb" if cur_srgb else "linear"
+        cache_name = (f"__sprite_preview__{srgb_tag}_{filter_tag}__"
+                      f"{os.path.normpath(state.file_path)}")
+        if native.has_imgui_texture(cache_name):
+            ss.texture_id = native.get_imgui_texture_id(cache_name)
+        else:
+            pixels = td.get_pixels_list()
+            w, h = td.width, td.height
+
+            if cur_srgb:
+                import array
+                _LUT = [int(((i / 255.0) ** (1.0 / 2.2)) * 255.0 + 0.5)
+                        for i in range(256)]
+                pixels = list(array.array('B', (
+                    _LUT[pixels[j]] if (j % 4) != 3 else pixels[j]
+                    for j in range(len(pixels))
+                )))
+
+            # Determine if point (nearest) filtering is requested
+            use_nearest = (cur_filter == FilterMode.POINT)
+
+            ss.texture_id = native.upload_texture_for_imgui(
+                cache_name, pixels, w, h, nearest=use_nearest)
+        if not ss.texture_id:
+            Debug.log_warning(f"[SpriteEditor] upload_texture_for_imgui returned 0 for {cache_name}")
+        else:
+            ss._cache_name = cache_name
+            # Clean up old GPU texture now that the new one is valid
+            if old_cache_name and old_cache_name != cache_name:
+                try:
+                    if native.has_imgui_texture(old_cache_name):
+                        native.remove_imgui_texture(old_cache_name)
+                except Exception:
+                    pass
+    except Exception as exc:
+        Debug.log_warning(f"[SpriteEditor] Upload exception: {exc}")
+        ss.texture_id = 0
+    return ss.tex_w > 0
+
+
+def _render_sprite_body(ctx: InxGUIContext, panel, state: _State):
+    """Render the full SPRITE-mode inspector: import fields + slice editor."""
+    from .inspector_utils import render_compact_section_header
+
+    settings: TextureImportSettings = state.settings
+
+    # ── Standard import fields (same as generic texture) ────────────────
+    cat_def = _categories.get("texture")
+    if cat_def and cat_def.editable_fields:
+        _render_import_fields(ctx, cat_def, state)
+
+    # ── Sprite slice editor ─────────────────────────────────────────────
+    if not isinstance(settings, TextureImportSettings):
+        return
+    if settings.texture_type != TextureType.SPRITE:
+        return
+
+    ctx.separator()
+    if not render_compact_section_header(ctx, t("sprite.slice_editor")):
+        return
+
+    if not _ensure_sprite_texture(state):
+        ctx.push_style_color(ImGuiCol.Text, *Theme.WARNING_TEXT)
+        ctx.label(t("sprite.cannot_load"))
+        ctx.pop_style_color(1)
+        return
+
+    ss = _sprite_state
+
+    # Derive rows/cols from existing sprite_frames when the UI state is at
+    # the default 1×1 (e.g. first load of a previously-sliced texture).
+    if ss.slice_rows == 1 and ss.slice_cols == 1 and settings.sprite_frames:
+        frames = settings.sprite_frames
+        if len(frames) > 1 and ss.tex_w > 0 and ss.tex_h > 0:
+            fw = frames[0].w
+            fh = frames[0].h
+            if fw > 0 and fh > 0:
+                cols = max(1, round(ss.tex_w / fw))
+                rows = max(1, round(ss.tex_h / fh))
+                if rows * cols == len(frames):
+                    ss.slice_rows = rows
+                    ss.slice_cols = cols
+
+    labels = [t("sprite.image_size"), t("sprite.rows"), t("sprite.cols")]
+    lw = max_label_w(ctx, labels)
+
+    # Image dimensions (read-only)
+    field_label(ctx, t("sprite.image_size"), lw)
+    ctx.label(f"{ss.tex_w} x {ss.tex_h}")
+
+    # Auto-slice controls
+    field_label(ctx, t("sprite.rows"), lw)
+    ctx.set_next_item_width(120)
+    ss.slice_rows = max(1, ctx.input_int("##sprite_rows", ss.slice_rows, 1, 4))
+
+    field_label(ctx, t("sprite.cols"), lw)
+    ctx.set_next_item_width(120)
+    ss.slice_cols = max(1, ctx.input_int("##sprite_cols", ss.slice_cols, 1, 4))
+
+    ctx.button(t("sprite.auto_slice"), lambda: _auto_slice(settings, ss))
+    ctx.dummy(0, 4)
+
+    # ── Visual preview with divider lines ────────────────────────────────
+    _render_sprite_preview(ctx, settings, ss, state)
+
+
+def _auto_slice(settings: TextureImportSettings, ss: _SpriteEditorState):
+    """Generate uniform sprite_frames from rows × cols grid."""
+    rows, cols = ss.slice_rows, ss.slice_cols
+    if rows < 1 or cols < 1 or ss.tex_w < 1 or ss.tex_h < 1:
+        return
+    fw = ss.tex_w // cols
+    fh = ss.tex_h // rows
+    frames = []
+    idx = 0
+    for r in range(rows):
+        for c in range(cols):
+            frames.append(SpriteFrame(
+                name=f"frame_{idx}",
+                x=c * fw, y=r * fh,
+                w=fw, h=fh,
+            ))
+            idx += 1
+    settings.sprite_frames = frames
+    ss.selected_frame = -1
+
+
+def _auto_save_sprite(state: _State):
+    """Persist sprite_frames to .meta immediately."""
+    if state.exec_layer and state.settings:
+        state.exec_layer.apply_import_settings(state.settings)
+        if hasattr(state.settings, 'copy'):
+            state.disk_settings = state.settings.copy()
+
+
+def _collect_dividers(settings: TextureImportSettings,
+                      tex_w: int, tex_h: int):
+    """Extract unique vertical (X) and horizontal (Y) divider positions
+    from sprite_frames, excluding image edges (0 and max)."""
+    v_set: set[int] = set()
+    h_set: set[int] = set()
+    for f in settings.sprite_frames:
+        v_set.add(f.x)
+        v_set.add(f.x + f.w)
+        h_set.add(f.y)
+        h_set.add(f.y + f.h)
+    # Remove image boundary values — they are implicit
+    v_set.discard(0)
+    v_set.discard(tex_w)
+    h_set.discard(0)
+    h_set.discard(tex_h)
+    return sorted(v_set), sorted(h_set)
+
+
+def _rebuild_frames_from_dividers(settings: TextureImportSettings,
+                                  v_divs: list[int], h_divs: list[int],
+                                  tex_w: int, tex_h: int):
+    """Regenerate sprite_frames from the current divider positions."""
+    xs = [0] + v_divs + [tex_w]
+    ys = [0] + h_divs + [tex_h]
+    frames = []
+    idx = 0
+    for ri in range(len(ys) - 1):
+        for ci in range(len(xs) - 1):
+            frames.append(SpriteFrame(
+                name=f"frame_{idx}",
+                x=xs[ci], y=ys[ri],
+                w=xs[ci + 1] - xs[ci],
+                h=ys[ri + 1] - ys[ri],
+            ))
+            idx += 1
+    settings.sprite_frames = frames
+
+
+def _render_sprite_preview(ctx: InxGUIContext, settings: TextureImportSettings,
+                           ss: _SpriteEditorState, state: _State):
+    """Draw the texture image with white divider lines overlaid."""
+    avail_w = ctx.get_content_region_avail_width() - 8
+    if avail_w < 32:
+        return
+
+    # Fit image into available width, maintain aspect ratio
+    scale = min(avail_w / ss.tex_w, 600.0 / ss.tex_h) if ss.tex_h > 0 else 1.0
+    draw_w = ss.tex_w * scale
+    draw_h = ss.tex_h * scale
+
+    # Render the texture image
+    if ss.texture_id:
+        ctx.image(ss.texture_id, draw_w, draw_h)
+    else:
+        cx = ctx.get_cursor_pos_x()
+        cy = ctx.get_cursor_pos_y()
+        wx = ctx.get_window_pos_x()
+        wy = ctx.get_window_pos_y()
+        sy = ctx.get_scroll_y()
+        fb_x = wx + cx
+        fb_y = wy + cy - sy
+        ctx.invisible_button("##sprite_preview_fb", draw_w, draw_h)
+        ctx.draw_filled_rect(fb_x, fb_y, fb_x + draw_w, fb_y + draw_h,
+                             0.15, 0.15, 0.15, 1.0)
+
+    # Screen coords of the image widget
+    img_x = ctx.get_item_rect_min_x()
+    img_y = ctx.get_item_rect_min_y()
+    img_hovered = ctx.is_item_hovered()
+
+    # Outer border
+    ctx.draw_rect(img_x, img_y, img_x + draw_w, img_y + draw_h,
+                  1.0, 1.0, 1.0, 0.6, 1.0)
+
+    # Collect divider lines from sprite_frames
+    v_divs, h_divs = _collect_dividers(settings, ss.tex_w, ss.tex_h)
+
+    # Draw divider lines: thin shadow + white line
+    for vx in v_divs:
+        sx = img_x + vx * scale
+        ctx.draw_line(sx, img_y, sx, img_y + draw_h,
+                      0.0, 0.0, 0.0, 0.4, 3.0)
+        ctx.draw_line(sx, img_y, sx, img_y + draw_h,
+                      1.0, 1.0, 1.0, 0.9, 1.0)
+
+    for hy in h_divs:
+        sy_line = img_y + hy * scale
+        ctx.draw_line(img_x, sy_line, img_x + draw_w, sy_line,
+                      0.0, 0.0, 0.0, 0.4, 3.0)
+        ctx.draw_line(img_x, sy_line, img_x + draw_w, sy_line,
+                      1.0, 1.0, 1.0, 0.9, 1.0)
+
+    # ── Interaction: click near a line to start dragging it ─────────────
+    _GRAB_THRESHOLD = 5.0  # pixels
+
+    if img_hovered:
+        mx = ctx.get_mouse_pos_x() - img_x
+        my = ctx.get_mouse_pos_y() - img_y
+
+        if ctx.is_mouse_button_clicked(0):
+            ss.drag_edge = ""
+            ss.drag_frame_idx = -1
+            # Check vertical dividers
+            for i, vx in enumerate(v_divs):
+                if abs(mx - vx * scale) < _GRAB_THRESHOLD:
+                    ss.drag_edge = "v"
+                    ss.drag_frame_idx = i  # index into v_divs
+                    break
+            else:
+                # Check horizontal dividers
+                for i, hy in enumerate(h_divs):
+                    if abs(my - hy * scale) < _GRAB_THRESHOLD:
+                        ss.drag_edge = "h"
+                        ss.drag_frame_idx = i  # index into h_divs
+                        break
+
+        # Drag a divider line
+        if ctx.is_mouse_dragging(0) and ss.drag_edge and ss.drag_frame_idx >= 0:
+            if ss.drag_edge == "v" and ss.drag_frame_idx < len(v_divs):
+                new_px = max(1, min(ss.tex_w - 1, round(mx / scale)))
+                v_divs[ss.drag_frame_idx] = new_px
+                v_divs.sort()
+                _rebuild_frames_from_dividers(settings, v_divs, h_divs,
+                                              ss.tex_w, ss.tex_h)
+                try:
+                    ss.drag_frame_idx = v_divs.index(new_px)
+                except ValueError:
+                    ss.drag_frame_idx = -1
+            elif ss.drag_edge == "h" and ss.drag_frame_idx < len(h_divs):
+                new_py = max(1, min(ss.tex_h - 1, round(my / scale)))
+                h_divs[ss.drag_frame_idx] = new_py
+                h_divs.sort()
+                _rebuild_frames_from_dividers(settings, v_divs=v_divs,
+                                              h_divs=h_divs,
+                                              tex_w=ss.tex_w, tex_h=ss.tex_h)
+                try:
+                    ss.drag_frame_idx = h_divs.index(new_py)
+                except ValueError:
+                    ss.drag_frame_idx = -1
+
+    if not ctx.is_mouse_button_down(0):
+        ss.drag_edge = ""
+        ss.drag_frame_idx = -1
+
+
+# _render_frame_table removed — divider lines replace per-frame editing
 
 
 # ═══════════════════════════════════════════════════════════════════════════

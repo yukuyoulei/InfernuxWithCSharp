@@ -34,8 +34,6 @@ class ResourceChangeHandler(FileSystemEventHandler):
         self._shader_cache_invalidation_callbacks = []
         # Get AssetDatabase for resource registration
         self._asset_database = engine.get_asset_database()
-        # Track C# compile errors per project so successful rebuilds can
-        # clear stale diagnostics from previously failing files.
         self._csharp_error_files_by_project = {}
 
     @staticmethod
@@ -52,7 +50,7 @@ class ResourceChangeHandler(FileSystemEventHandler):
 
     @classmethod
     def _is_script_source(cls, file_path: str) -> bool:
-        return cls._is_csharp_script(file_path)
+        return cls._is_python_script(file_path) or cls._is_csharp_script(file_path)
 
     def _get_csharp_project_key(self, file_path: str) -> str:
         csproj_path = self._script_compiler._find_csharp_project(file_path)
@@ -73,7 +71,7 @@ class ResourceChangeHandler(FileSystemEventHandler):
         return grouped
 
     def _apply_script_errors(self, file_path: str, errors) -> None:
-        from Infernux.components.script_loader import set_script_error, _clear_script_error
+        from Infernux.components.script_loader import _clear_script_error, set_script_error
 
         normalized_file_path = self._normalized_path(file_path)
         grouped = self._group_script_errors(file_path, errors)
@@ -157,7 +155,7 @@ class ResourceChangeHandler(FileSystemEventHandler):
             else:
                 self._engine.delete_resources(path)
             if self._is_script_source(path):
-                self._queue_script_reload(path)
+                self._clear_script_errors(path)
                 rm = ResourcesManager.instance()
                 if rm is not None:
                     rm.notify_script_catalog_changed(path, "deleted")
@@ -193,6 +191,9 @@ class ResourceChangeHandler(FileSystemEventHandler):
                 # For moved scripts, queue reload
                 if self._is_script_source(event.src_path):
                     self._queue_script_reload(event.src_path)
+                    rm = ResourcesManager.instance()
+                    if rm is not None:
+                        rm.notify_script_catalog_changed(event.src_path, "moved")
                 return
             # Check script sources on creation
             if self._is_script_source(event.src_path):
@@ -212,30 +213,30 @@ class ResourceChangeHandler(FileSystemEventHandler):
             src = event.src_path
             lower = src.replace("\\", "/").lower()
 
-            # .meta file changed → propagate as modification of the owning asset
+            # .meta file changed → queue for main-thread processing.
+            # The watcher thread must NOT call C++ GPU/pipeline functions
+            # directly — that races with the render loop and causes
+            # use-after-free of Vulkan handles (VkImageView, descriptor sets).
             if lower.endswith(".meta") and not lower.endswith(".meta.tmp"):
                 owner_path = src[:-5]  # strip ".meta"
                 if os.path.isfile(owner_path):
-                    Debug.log_internal(f"[Meta Modified] {src} -> owner {owner_path}")
-                    # Refresh in-memory meta from disk (re-register the resource)
-                    # so that subsequent reloads read the updated import settings.
-                    if self._asset_database:
-                        self._asset_database.on_asset_modified(owner_path)
                     from Infernux.core.assets import AssetManager
-                    AssetManager.on_asset_modified(owner_path)
+                    if AssetManager.is_meta_watcher_suppressed(owner_path):
+                        Debug.log_internal(f"[Meta Modified] suppressed watcher echo for '{owner_path}'")
+                        return
+                    with self._queue_lock:
+                        key = ("meta", owner_path)
+                        if key not in self._pending_reload_queue:
+                            self._pending_reload_queue.append(key)
                 return
 
             if self._should_ignore(src):
                 return
-            # Debug.log_internal(f"[Modified] {src}")
-            # Invalidate stale asset caches (material / texture)
-            from Infernux.core.assets import AssetManager
-            AssetManager.on_asset_modified(src)
-            # Use AssetDatabase to update meta (preserves GUID, updates content_hash)
-            if self._asset_database:
-                self._asset_database.on_asset_modified(event.src_path)
-            else:
-                self._engine.modify_resources(event.src_path)
+            # Asset content changed → queue for main-thread processing.
+            with self._queue_lock:
+                key = ("asset", src)
+                if key not in self._pending_reload_queue:
+                    self._pending_reload_queue.append(key)
             # Check script sources on modification
             if self._is_script_source(event.src_path):
                 self._queue_script_reload(event.src_path)
@@ -273,7 +274,17 @@ class ResourceChangeHandler(FileSystemEventHandler):
             # Avoid duplicates
             if file_path not in self._pending_reload_queue:
                 self._pending_reload_queue.append(file_path)
-    
+
+    @staticmethod
+    def _emit_asset_changed(file_path: str, event_type: str):
+        """Emit EditorEvent.ASSET_CHANGED so components can react to asset changes."""
+        try:
+            from Infernux.engine.ui.event_bus import EditorEventBus, EditorEvent
+            bus = EditorEventBus.instance()
+            bus.emit(EditorEvent.ASSET_CHANGED, file_path, event_type)
+        except Exception:
+            pass
+
     def _queue_shader_reload(self, file_path: str):
         """Queue a shader for hot-reload (will be processed in main thread)."""
         with self._queue_lock:
@@ -297,6 +308,10 @@ class ResourceChangeHandler(FileSystemEventHandler):
                 try:
                     if isinstance(item, tuple) and item[0] == "shader":
                         self._reload_shader(item[1])
+                    elif isinstance(item, tuple) and item[0] == "meta":
+                        self._process_meta_change(item[1])
+                    elif isinstance(item, tuple) and item[0] == "asset":
+                        self._process_asset_modified(item[1])
                     elif isinstance(item, str) and self._is_csharp_script(item):
                         project_key = self._get_csharp_project_key(item)
                         files = csharp_groups.setdefault(project_key, [])
@@ -311,8 +326,29 @@ class ResourceChangeHandler(FileSystemEventHandler):
                 try:
                     self._check_csharp_project_group(files)
                 except Exception as exc:
-                    Debug.log_error(f"C# auto-compile failed for {files[0] if files else '<unknown>'}: {exc}")
-    
+                    Debug.log_error(
+                        f"C# auto-compile failed for {files[0] if files else '<unknown>'}: {exc}"
+                    )
+
+    def _process_meta_change(self, owner_path: str):
+        """Handle .meta file change on the main thread."""
+        Debug.log_internal(f"[Meta Modified] {owner_path}.meta -> owner {owner_path}")
+        if self._asset_database:
+            self._asset_database.on_asset_modified(owner_path)
+        from Infernux.core.assets import AssetManager
+        AssetManager.on_asset_modified(owner_path)
+        self._emit_asset_changed(owner_path, "modified")
+
+    def _process_asset_modified(self, src_path: str):
+        """Handle asset content change on the main thread."""
+        from Infernux.core.assets import AssetManager
+        AssetManager.on_asset_modified(src_path)
+        if self._asset_database:
+            self._asset_database.on_asset_modified(src_path)
+        else:
+            self._engine.modify_resources(src_path)
+        self._emit_asset_changed(src_path, "modified")
+
     def _check_script(self, file_path: str):
         """Validate a script source and hot-reload Python components when applicable."""
         # Verify file exists and is readable (ensures write is complete)
@@ -326,7 +362,8 @@ class ResourceChangeHandler(FileSystemEventHandler):
                 Debug.log_error(
                     f"Script Error in {os.path.basename(error.file_path)}:{error.line_number}\n{error.message}",
                     source_file=error.file_path,
-                    source_line=error.line_number)
+                    source_line=error.line_number,
+                )
         else:
             self._clear_script_errors(file_path)
             Debug.log_internal(f"[OK] Script OK: {os.path.basename(file_path)}")
@@ -342,6 +379,7 @@ class ResourceChangeHandler(FileSystemEventHandler):
             # Hot-reload InxComponents only for Python-backed runtime scripts.
             if self._is_python_script(file_path):
                 from Infernux.engine.play_mode import PlayModeManager
+
                 play_mode = PlayModeManager.instance()
                 if play_mode:
                     play_mode.reload_components_from_script(file_path)
@@ -502,7 +540,7 @@ class ResourcesManager:
             self._observer.schedule(self._event_handler, self._assets_path, recursive=True)
             self._observer.start()
 
-            # Initial full scan: validate every script source in Assets/ so
+            # Initial full scan: validate script sources in Assets/ so
             # pre-existing errors are detected on engine startup.
             self._initial_script_scan()
 
@@ -512,7 +550,7 @@ class ResourcesManager:
             self._shutdown_observer(join_timeout=5.0)
 
     def _initial_script_scan(self):
-        """Walk Assets/ and validate every ``.cs`` script file.
+        """Walk Assets/ and validate script sources.
 
         Called once from the watchdog thread right after the observer
         starts so that errors present *before* the engine was opened
@@ -524,19 +562,18 @@ class ResourcesManager:
         error_count = 0
         scanned_csharp_projects = set()
         for root, dirs, files in os.walk(self._assets_path):
-            dirs[:] = [d for d in dirs if d not in ('__pycache__', '.vs', 'bin', 'obj')]
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".vs", "bin", "obj")]
             for fname in files:
                 fpath = os.path.join(root, fname)
                 if self._event_handler and self._event_handler._should_ignore(fpath):
                     continue
-                if not fname.endswith('.cs'):
+                if not self._event_handler or not self._event_handler._is_script_source(fpath):
                     continue
-
-                project_key = self._event_handler._get_csharp_project_key(fpath) if self._event_handler else fpath
-                if project_key in scanned_csharp_projects:
-                    continue
-                scanned_csharp_projects.add(project_key)
-
+                if fname.endswith(".cs"):
+                    project_key = self._event_handler._get_csharp_project_key(fpath)
+                    if project_key in scanned_csharp_projects:
+                        continue
+                    scanned_csharp_projects.add(project_key)
                 errors = compiler.check_file(fpath)
                 if errors and self._event_handler is not None:
                     grouped = self._event_handler._group_script_errors(fpath, errors)

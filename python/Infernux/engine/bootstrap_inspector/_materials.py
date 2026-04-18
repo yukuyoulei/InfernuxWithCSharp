@@ -4,21 +4,24 @@ from __future__ import annotations
 from Infernux.debug import Debug
 
 
-def _collect_material_renderers(items, native_map, obj, wrapper_cls):
-    """Collect MeshRenderer tuples and their signature parts."""
+def _collect_material_renderers(items, native_map, obj):
+    """Collect renderer tuples (MeshRenderer / SpriteRenderer) and their signature parts."""
     from Infernux.components.builtin_component import BuiltinComponent
+
+    _RENDERER_TYPES = {"MeshRenderer", "SpriteRenderer"}
 
     renderers = []
     signature_parts = []
     for item in items:
-        if not item.is_native or item.type_name != "MeshRenderer":
+        if not item.is_native or item.type_name not in _RENDERER_TYPES:
             continue
         renderer = native_map.get(item.component_id)
         if renderer is None:
             continue
-        if wrapper_cls is not None and not isinstance(renderer, BuiltinComponent):
+        wclass = BuiltinComponent._builtin_registry.get(item.type_name)
+        if wclass is not None and not isinstance(renderer, BuiltinComponent):
             try:
-                renderer = wrapper_cls._get_or_create_wrapper(renderer, obj)
+                renderer = wclass._get_or_create_wrapper(renderer, obj)
             except Exception as _exc:
                 Debug.log(f"[Suppressed] {type(_exc).__name__}: {_exc}")
         mat_count = getattr(renderer, 'material_count', 0) or 1
@@ -90,16 +93,16 @@ def wire_material_sections(ip, _t, engine, _inspector_support,
         from Infernux.components.builtin_component import BuiltinComponent
         from Infernux.engine.ui import inspector_material as mat_ui
         from Infernux.engine.ui.inspector_utils import render_compact_section_header, render_info_text
-        from Infernux.engine.ui.theme import Theme, ImGuiCol, ImGuiStyleVar
+        from Infernux.engine.ui.theme import Theme, ImGuiCol
+        from Infernux.engine.ui.panel_spacing import push_inspector_material_block
 
         scene, items, native_map, _py_map = get_cached_maps(obj_id)
         obj = scene.find_by_id(obj_id) if scene else None
         if obj is None:
             return
 
-        wrapper_cls = BuiltinComponent._builtin_registry.get("MeshRenderer")
         renderers, signature = _collect_material_renderers(
-            items, native_map, obj, wrapper_cls)
+            items, native_map, obj)
 
         if not renderers:
             return
@@ -137,8 +140,7 @@ def wire_material_sections(ip, _t, engine, _inspector_support,
         if not valid_entries:
             return
 
-        ctx.push_style_var_vec2(ImGuiStyleVar.FramePadding, *Theme.INSPECTOR_FRAME_PAD)
-        ctx.push_style_var_vec2(ImGuiStyleVar.ItemSpacing, *Theme.INSPECTOR_ITEM_SPC)
+        push_inspector_material_block(ctx)
         for index, entry in enumerate(valid_entries):
             title = entry["label"]
             if multiple_renderers and owner_name:
