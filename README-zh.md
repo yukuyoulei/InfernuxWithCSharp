@@ -68,7 +68,11 @@ The repository already includes a first working slice of managed C# runtime brid
 - Lifecycle bridging: `Awake`, `OnEnable`, `Start`, `Update(float)`, `FixedUpdate(float)`, `LateUpdate(float)`, `OnDisable`, `OnDestroy`, `OnValidate`, and `Reset`.
 - Component context syncing: `GameObjectId`, `ComponentId`, `enabled`, `ExecutionOrder`, and `ScriptGuid` are synchronized into the managed side.
 - `GameObject` bridging: `Find`, `Create`, `CreatePrimitive`, `Instantiate`, `Destroy`, `SetActive`, plus `name`, `activeSelf`, `activeInHierarchy`, `tag`, `layer`, and `transform`.
-- Component access bridging: `AddComponent<T>()`, `GetComponent`, `TryGetComponent`, `GetComponents`, `GetComponentInChildren`, `GetComponentsInChildren`, `GetComponentInParent`, and `GetComponentsInParent`.
+- Component access bridging: `AddComponent<T>()`, `GetComponent`, `TryGetComponent`, `GetComponents`, `GetComponentInChildren`, `TryGetComponentInChildren`, `GetComponentsInChildren`, `GetComponentInParent`, `TryGetComponentInParent`, and `GetComponentsInParent`, including `includeInactive` and list-filling overloads.
+- Common helper types: built-in `Mathf`, `Random`, `Color`, `Color32`, `Vector3`, and `Quaternion` so scripts can use familiar Unity-style utility types directly.
+- Transform matrix helpers: built-in `Matrix4x4` plus `localToWorldMatrix` and `worldToLocalMatrix` for common Unity-style space conversion workflows.
+- Camera bridging: built-in `Camera : Behaviour` with `Camera.main`, `orthographic`, `fieldOfView`, `aspect`, clipping planes, `depth`, `cullingMask`, `clearFlags`, `backgroundColor`, `pixelWidth`, `pixelHeight`, `ScreenToWorldPoint`, `WorldToScreenPoint`, and `ScreenPointToRay`.
+- Camera-related helper types: built-in `Vector2`, `Ray`, `CameraProjection`, and `CameraClearFlags` to support Unity-style camera and screen-space workflows.
 - `Transform` property bridging: `position`, `localPosition`, `localScale`, `rotation`, `localRotation`, `eulerAngles`, `localEulerAngles`, `lossyScale`, `parent`, `childCount`, and `root`.
 - `Transform` operation bridging: `Translate`, `TranslateLocal`, `Rotate`, `RotateAround`, `LookAt`, `TransformPoint`, `InverseTransformPoint`, `TransformDirection`, `InverseTransformDirection`, `TransformVector`, and `InverseTransformVector`.
 - Hierarchy bridging: `SetParent`, `GetChild`, `Find`, `DetachChildren`, `GetSiblingIndex`, `SetSiblingIndex`, `SetAsFirstSibling`, `SetAsLastSibling`, and `IsChildOf`.
@@ -77,7 +81,7 @@ The repository already includes a first working slice of managed C# runtime brid
 Current limitations:
 
 - Managed C# runtime hosting is currently supported on Windows only.
-- The current `GetComponent*` family on the C# side is confirmed for `Transform` and managed `MonoBehaviour`-derived components; direct bridging for additional native built-in components is still being expanded.
+- The current `GetComponent*` family on the C# side is confirmed for `Transform`, native `Camera`, and managed `MonoBehaviour`-derived components; direct bridging for additional native built-in components is still being expanded.
 
 ## Architecture
 

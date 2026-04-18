@@ -68,6 +68,99 @@ namespace Infernux
         Plane = 4,
     }
 
+    public enum Space
+    {
+        World = 0,
+        Self = 1,
+    }
+
+    public enum CameraProjection
+    {
+        Perspective = 0,
+        Orthographic = 1,
+    }
+
+    public enum CameraClearFlags
+    {
+        Skybox = 0,
+        SolidColor = 1,
+        DepthOnly = 2,
+        DontClear = 3,
+    }
+
+    public readonly struct Vector2
+    {
+        public float X { get; }
+        public float Y { get; }
+
+        public Vector2(float x, float y)
+        {
+            X = x;
+            Y = y;
+        }
+
+        public static Vector2 zero => new(0f, 0f);
+        public static Vector2 one => new(1f, 1f);
+        public static Vector2 right => new(1f, 0f);
+        public static Vector2 up => new(0f, 1f);
+
+        public float sqrMagnitude => X * X + Y * Y;
+        public float magnitude => MathF.Sqrt(sqrMagnitude);
+        public Vector2 normalized
+        {
+            get
+            {
+                float length = magnitude;
+                return length > 1e-6f ? this / length : zero;
+            }
+        }
+
+        public static Vector2 operator +(Vector2 lhs, Vector2 rhs)
+        {
+            return new Vector2(lhs.X + rhs.X, lhs.Y + rhs.Y);
+        }
+
+        public static Vector2 operator -(Vector2 lhs, Vector2 rhs)
+        {
+            return new Vector2(lhs.X - rhs.X, lhs.Y - rhs.Y);
+        }
+
+        public static Vector2 operator -(Vector2 value)
+        {
+            return new Vector2(-value.X, -value.Y);
+        }
+
+        public static Vector2 operator *(Vector2 value, float scalar)
+        {
+            return new Vector2(value.X * scalar, value.Y * scalar);
+        }
+
+        public static Vector2 operator *(float scalar, Vector2 value)
+        {
+            return value * scalar;
+        }
+
+        public static Vector2 operator /(Vector2 value, float scalar)
+        {
+            return new Vector2(value.X / scalar, value.Y / scalar);
+        }
+
+        public static float Dot(Vector2 lhs, Vector2 rhs)
+        {
+            return lhs.X * rhs.X + lhs.Y * rhs.Y;
+        }
+
+        public static Vector2 Lerp(Vector2 a, Vector2 b, float t)
+        {
+            return new Vector2(Mathf.Lerp(a.X, b.X, t), Mathf.Lerp(a.Y, b.Y, t));
+        }
+
+        public override string ToString()
+        {
+            return $"({X}, {Y})";
+        }
+    }
+
     public readonly struct Vector3
     {
         public float X { get; }
@@ -79,6 +172,65 @@ namespace Infernux
             X = x;
             Y = y;
             Z = z;
+        }
+
+        public static Vector3 zero => new(0f, 0f, 0f);
+        public static Vector3 right => new(1f, 0f, 0f);
+        public static Vector3 up => new(0f, 1f, 0f);
+        public static Vector3 forward => new(0f, 0f, 1f);
+
+        public float sqrMagnitude => X * X + Y * Y + Z * Z;
+        public float magnitude => MathF.Sqrt(sqrMagnitude);
+        public Vector3 normalized
+        {
+            get
+            {
+                float length = magnitude;
+                return length > 1e-6f ? this / length : zero;
+            }
+        }
+
+        public static Vector3 operator +(Vector3 lhs, Vector3 rhs)
+        {
+            return new Vector3(lhs.X + rhs.X, lhs.Y + rhs.Y, lhs.Z + rhs.Z);
+        }
+
+        public static Vector3 operator -(Vector3 lhs, Vector3 rhs)
+        {
+            return new Vector3(lhs.X - rhs.X, lhs.Y - rhs.Y, lhs.Z - rhs.Z);
+        }
+
+        public static Vector3 operator -(Vector3 value)
+        {
+            return new Vector3(-value.X, -value.Y, -value.Z);
+        }
+
+        public static Vector3 operator *(Vector3 value, float scalar)
+        {
+            return new Vector3(value.X * scalar, value.Y * scalar, value.Z * scalar);
+        }
+
+        public static Vector3 operator *(float scalar, Vector3 value)
+        {
+            return value * scalar;
+        }
+
+        public static Vector3 operator /(Vector3 value, float scalar)
+        {
+            return new Vector3(value.X / scalar, value.Y / scalar, value.Z / scalar);
+        }
+
+        public static float Dot(Vector3 lhs, Vector3 rhs)
+        {
+            return lhs.X * rhs.X + lhs.Y * rhs.Y + lhs.Z * rhs.Z;
+        }
+
+        public static Vector3 Cross(Vector3 lhs, Vector3 rhs)
+        {
+            return new Vector3(
+                lhs.Y * rhs.Z - lhs.Z * rhs.Y,
+                lhs.Z * rhs.X - lhs.X * rhs.Z,
+                lhs.X * rhs.Y - lhs.Y * rhs.X);
         }
 
         public override string ToString()
@@ -103,6 +255,129 @@ namespace Infernux
         }
 
         public static Quaternion identity => new(0f, 0f, 0f, 1f);
+
+        public static Quaternion Euler(Vector3 euler)
+        {
+            return Euler(euler.X, euler.Y, euler.Z);
+        }
+
+        public static Quaternion Euler(float x, float y, float z)
+        {
+            float halfX = x * (MathF.PI / 180f) * 0.5f;
+            float halfY = y * (MathF.PI / 180f) * 0.5f;
+            float halfZ = z * (MathF.PI / 180f) * 0.5f;
+            float cx = MathF.Cos(halfX);
+            float sx = MathF.Sin(halfX);
+            float cy = MathF.Cos(halfY);
+            float sy = MathF.Sin(halfY);
+            float cz = MathF.Cos(halfZ);
+            float sz = MathF.Sin(halfZ);
+
+            return new Quaternion(
+                cy * sx * cz + sy * cx * sz,
+                sy * cx * cz - cy * sx * sz,
+                cy * cx * sz - sy * sx * cz,
+                cy * cx * cz + sy * sx * sz);
+        }
+
+        public static Quaternion AngleAxis(float angle, Vector3 axis)
+        {
+            float axisLength = MathF.Sqrt(axis.X * axis.X + axis.Y * axis.Y + axis.Z * axis.Z);
+            if (axisLength <= 1e-6f)
+            {
+                return identity;
+            }
+
+            float invLength = 1f / axisLength;
+            float halfAngle = angle * (MathF.PI / 180f) * 0.5f;
+            float sinHalfAngle = MathF.Sin(halfAngle);
+            float cosHalfAngle = MathF.Cos(halfAngle);
+            return new Quaternion(
+                axis.X * invLength * sinHalfAngle,
+                axis.Y * invLength * sinHalfAngle,
+                axis.Z * invLength * sinHalfAngle,
+                cosHalfAngle);
+        }
+
+        public static Quaternion LookRotation(Vector3 forward)
+        {
+            return LookRotation(forward, Vector3.up);
+        }
+
+        public static Quaternion LookRotation(Vector3 forward, Vector3 upwards)
+        {
+            Vector3 zAxis = forward.normalized;
+            if (zAxis.sqrMagnitude <= 1e-12f)
+            {
+                return identity;
+            }
+
+            Vector3 xAxis = Vector3.Cross(upwards, zAxis).normalized;
+            if (xAxis.sqrMagnitude <= 1e-12f)
+            {
+                Vector3 fallbackUp = MathF.Abs(zAxis.Y) < 0.999f ? Vector3.up : Vector3.right;
+                xAxis = Vector3.Cross(fallbackUp, zAxis).normalized;
+            }
+
+            Vector3 yAxis = Vector3.Cross(zAxis, xAxis);
+
+            float m00 = xAxis.X;
+            float m01 = yAxis.X;
+            float m02 = zAxis.X;
+            float m10 = xAxis.Y;
+            float m11 = yAxis.Y;
+            float m12 = zAxis.Y;
+            float m20 = xAxis.Z;
+            float m21 = yAxis.Z;
+            float m22 = zAxis.Z;
+            float trace = m00 + m11 + m22;
+
+            if (trace > 0f)
+            {
+                float s = MathF.Sqrt(trace + 1f) * 2f;
+                return new Quaternion(
+                    (m21 - m12) / s,
+                    (m02 - m20) / s,
+                    (m10 - m01) / s,
+                    0.25f * s);
+            }
+
+            if (m00 > m11 && m00 > m22)
+            {
+                float s = MathF.Sqrt(1f + m00 - m11 - m22) * 2f;
+                return new Quaternion(
+                    0.25f * s,
+                    (m01 + m10) / s,
+                    (m02 + m20) / s,
+                    (m21 - m12) / s);
+            }
+
+            if (m11 > m22)
+            {
+                float s = MathF.Sqrt(1f + m11 - m00 - m22) * 2f;
+                return new Quaternion(
+                    (m01 + m10) / s,
+                    0.25f * s,
+                    (m12 + m21) / s,
+                    (m02 - m20) / s);
+            }
+
+            float lastS = MathF.Sqrt(1f + m22 - m00 - m11) * 2f;
+            return new Quaternion(
+                (m02 + m20) / lastS,
+                (m12 + m21) / lastS,
+                0.25f * lastS,
+                (m10 - m01) / lastS);
+        }
+
+        public static Quaternion operator *(Quaternion lhs, Quaternion rhs)
+        {
+            return new Quaternion(
+                lhs.W * rhs.X + lhs.X * rhs.W + lhs.Y * rhs.Z - lhs.Z * rhs.Y,
+                lhs.W * rhs.Y - lhs.X * rhs.Z + lhs.Y * rhs.W + lhs.Z * rhs.X,
+                lhs.W * rhs.Z + lhs.X * rhs.Y - lhs.Y * rhs.X + lhs.Z * rhs.W,
+                lhs.W * rhs.W - lhs.X * rhs.X - lhs.Y * rhs.Y - lhs.Z * rhs.Z);
+        }
 
         public static Vector3 operator *(Quaternion rotation, Vector3 point)
         {
@@ -129,6 +404,549 @@ namespace Infernux
         public override string ToString()
         {
             return $"({X}, {Y}, {Z}, {W})";
+        }
+    }
+
+    public struct Color
+    {
+        public float r;
+        public float g;
+        public float b;
+        public float a;
+
+        public Color(float r, float g, float b, float a = 1f)
+        {
+            this.r = r;
+            this.g = g;
+            this.b = b;
+            this.a = a;
+        }
+
+        public static Color white => new(1f, 1f, 1f, 1f);
+        public static Color black => new(0f, 0f, 0f, 1f);
+        public static Color red => new(1f, 0f, 0f, 1f);
+        public static Color green => new(0f, 1f, 0f, 1f);
+        public static Color blue => new(0f, 0f, 1f, 1f);
+        public static Color yellow => new(1f, 0.92156863f, 0.015686275f, 1f);
+        public static Color cyan => new(0f, 1f, 1f, 1f);
+        public static Color magenta => new(1f, 0f, 1f, 1f);
+        public static Color gray => new(0.5f, 0.5f, 0.5f, 1f);
+        public static Color clear => new(0f, 0f, 0f, 0f);
+
+        public float grayscale => 0.299f * r + 0.587f * g + 0.114f * b;
+
+        public static Color Lerp(Color a, Color b, float t)
+        {
+            t = Mathf.Clamp01(t);
+            return new Color(
+                Mathf.Lerp(a.r, b.r, t),
+                Mathf.Lerp(a.g, b.g, t),
+                Mathf.Lerp(a.b, b.b, t),
+                Mathf.Lerp(a.a, b.a, t));
+        }
+
+        public static Color operator +(Color lhs, Color rhs)
+        {
+            return new Color(lhs.r + rhs.r, lhs.g + rhs.g, lhs.b + rhs.b, lhs.a + rhs.a);
+        }
+
+        public static Color operator -(Color lhs, Color rhs)
+        {
+            return new Color(lhs.r - rhs.r, lhs.g - rhs.g, lhs.b - rhs.b, lhs.a - rhs.a);
+        }
+
+        public static Color operator *(Color lhs, float scalar)
+        {
+            return new Color(lhs.r * scalar, lhs.g * scalar, lhs.b * scalar, lhs.a * scalar);
+        }
+
+        public static Color operator *(float scalar, Color rhs)
+        {
+            return rhs * scalar;
+        }
+
+        public static Color operator *(Color lhs, Color rhs)
+        {
+            return new Color(lhs.r * rhs.r, lhs.g * rhs.g, lhs.b * rhs.b, lhs.a * rhs.a);
+        }
+
+        public override string ToString()
+        {
+            return $"RGBA({r}, {g}, {b}, {a})";
+        }
+    }
+
+    public struct Color32
+    {
+        public byte r;
+        public byte g;
+        public byte b;
+        public byte a;
+
+        public Color32(byte r, byte g, byte b, byte a = 255)
+        {
+            this.r = r;
+            this.g = g;
+            this.b = b;
+            this.a = a;
+        }
+
+        public static implicit operator Color(Color32 value)
+        {
+            const float kInv = 1f / 255f;
+            return new Color(value.r * kInv, value.g * kInv, value.b * kInv, value.a * kInv);
+        }
+
+        public static implicit operator Color32(Color value)
+        {
+            return new Color32(
+                (byte)Mathf.Clamp(Mathf.RoundToInt(value.r * 255f), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(value.g * 255f), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(value.b * 255f), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(value.a * 255f), 0, 255));
+        }
+
+        public override string ToString()
+        {
+            return $"RGBA({r}, {g}, {b}, {a})";
+        }
+    }
+
+    public struct Matrix4x4
+    {
+        public float m00;
+        public float m01;
+        public float m02;
+        public float m03;
+        public float m10;
+        public float m11;
+        public float m12;
+        public float m13;
+        public float m20;
+        public float m21;
+        public float m22;
+        public float m23;
+        public float m30;
+        public float m31;
+        public float m32;
+        public float m33;
+
+        public Matrix4x4(
+            float m00, float m01, float m02, float m03,
+            float m10, float m11, float m12, float m13,
+            float m20, float m21, float m22, float m23,
+            float m30, float m31, float m32, float m33)
+        {
+            this.m00 = m00;
+            this.m01 = m01;
+            this.m02 = m02;
+            this.m03 = m03;
+            this.m10 = m10;
+            this.m11 = m11;
+            this.m12 = m12;
+            this.m13 = m13;
+            this.m20 = m20;
+            this.m21 = m21;
+            this.m22 = m22;
+            this.m23 = m23;
+            this.m30 = m30;
+            this.m31 = m31;
+            this.m32 = m32;
+            this.m33 = m33;
+        }
+
+        public static Matrix4x4 identity => new(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f);
+
+        public Matrix4x4 inverse
+        {
+            get
+            {
+                float[] m =
+                {
+                    m00, m01, m02, m03,
+                    m10, m11, m12, m13,
+                    m20, m21, m22, m23,
+                    m30, m31, m32, m33,
+                };
+                float[] inv = new float[16];
+
+                inv[0] = m[5] * m[10] * m[15] -
+                         m[5] * m[11] * m[14] -
+                         m[9] * m[6] * m[15] +
+                         m[9] * m[7] * m[14] +
+                         m[13] * m[6] * m[11] -
+                         m[13] * m[7] * m[10];
+                inv[4] = -m[4] * m[10] * m[15] +
+                          m[4] * m[11] * m[14] +
+                          m[8] * m[6] * m[15] -
+                          m[8] * m[7] * m[14] -
+                          m[12] * m[6] * m[11] +
+                          m[12] * m[7] * m[10];
+                inv[8] = m[4] * m[9] * m[15] -
+                         m[4] * m[11] * m[13] -
+                         m[8] * m[5] * m[15] +
+                         m[8] * m[7] * m[13] +
+                         m[12] * m[5] * m[11] -
+                         m[12] * m[7] * m[9];
+                inv[12] = -m[4] * m[9] * m[14] +
+                           m[4] * m[10] * m[13] +
+                           m[8] * m[5] * m[14] -
+                           m[8] * m[6] * m[13] -
+                           m[12] * m[5] * m[10] +
+                           m[12] * m[6] * m[9];
+                inv[1] = -m[1] * m[10] * m[15] +
+                          m[1] * m[11] * m[14] +
+                          m[9] * m[2] * m[15] -
+                          m[9] * m[3] * m[14] -
+                          m[13] * m[2] * m[11] +
+                          m[13] * m[3] * m[10];
+                inv[5] = m[0] * m[10] * m[15] -
+                         m[0] * m[11] * m[14] -
+                         m[8] * m[2] * m[15] +
+                         m[8] * m[3] * m[14] +
+                         m[12] * m[2] * m[11] -
+                         m[12] * m[3] * m[10];
+                inv[9] = -m[0] * m[9] * m[15] +
+                          m[0] * m[11] * m[13] +
+                          m[8] * m[1] * m[15] -
+                          m[8] * m[3] * m[13] -
+                          m[12] * m[1] * m[11] +
+                          m[12] * m[3] * m[9];
+                inv[13] = m[0] * m[9] * m[14] -
+                          m[0] * m[10] * m[13] -
+                          m[8] * m[1] * m[14] +
+                          m[8] * m[2] * m[13] +
+                          m[12] * m[1] * m[10] -
+                          m[12] * m[2] * m[9];
+                inv[2] = m[1] * m[6] * m[15] -
+                         m[1] * m[7] * m[14] -
+                         m[5] * m[2] * m[15] +
+                         m[5] * m[3] * m[14] +
+                         m[13] * m[2] * m[7] -
+                         m[13] * m[3] * m[6];
+                inv[6] = -m[0] * m[6] * m[15] +
+                          m[0] * m[7] * m[14] +
+                          m[4] * m[2] * m[15] -
+                          m[4] * m[3] * m[14] -
+                          m[12] * m[2] * m[7] +
+                          m[12] * m[3] * m[6];
+                inv[10] = m[0] * m[5] * m[15] -
+                          m[0] * m[7] * m[13] -
+                          m[4] * m[1] * m[15] +
+                          m[4] * m[3] * m[13] +
+                          m[12] * m[1] * m[7] -
+                          m[12] * m[3] * m[5];
+                inv[14] = -m[0] * m[5] * m[14] +
+                           m[0] * m[6] * m[13] +
+                           m[4] * m[1] * m[14] -
+                           m[4] * m[2] * m[13] -
+                           m[12] * m[1] * m[6] +
+                           m[12] * m[2] * m[5];
+                inv[3] = -m[1] * m[6] * m[11] +
+                          m[1] * m[7] * m[10] +
+                          m[5] * m[2] * m[11] -
+                          m[5] * m[3] * m[10] -
+                          m[9] * m[2] * m[7] +
+                          m[9] * m[3] * m[6];
+                inv[7] = m[0] * m[6] * m[11] -
+                         m[0] * m[7] * m[10] -
+                         m[4] * m[2] * m[11] +
+                         m[4] * m[3] * m[10] +
+                         m[8] * m[2] * m[7] -
+                         m[8] * m[3] * m[6];
+                inv[11] = -m[0] * m[5] * m[11] +
+                           m[0] * m[7] * m[9] +
+                           m[4] * m[1] * m[11] -
+                           m[4] * m[3] * m[9] -
+                           m[8] * m[1] * m[7] +
+                           m[8] * m[3] * m[5];
+                inv[15] = m[0] * m[5] * m[10] -
+                          m[0] * m[6] * m[9] -
+                          m[4] * m[1] * m[10] +
+                          m[4] * m[2] * m[9] +
+                          m[8] * m[1] * m[6] -
+                          m[8] * m[2] * m[5];
+
+                float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+                if (Mathf.Abs(det) <= Mathf.Epsilon)
+                {
+                    return identity;
+                }
+
+                det = 1f / det;
+                return new Matrix4x4(
+                    inv[0] * det, inv[1] * det, inv[2] * det, inv[3] * det,
+                    inv[4] * det, inv[5] * det, inv[6] * det, inv[7] * det,
+                    inv[8] * det, inv[9] * det, inv[10] * det, inv[11] * det,
+                    inv[12] * det, inv[13] * det, inv[14] * det, inv[15] * det);
+            }
+        }
+
+        public static Matrix4x4 TRS(Vector3 position, Quaternion rotation, Vector3 scale)
+        {
+            float x = rotation.X;
+            float y = rotation.Y;
+            float z = rotation.Z;
+            float w = rotation.W;
+            float x2 = x + x;
+            float y2 = y + y;
+            float z2 = z + z;
+            float xx = x * x2;
+            float yy = y * y2;
+            float zz = z * z2;
+            float xy = x * y2;
+            float xz = x * z2;
+            float yz = y * z2;
+            float wx = w * x2;
+            float wy = w * y2;
+            float wz = w * z2;
+
+            return new Matrix4x4(
+                (1f - (yy + zz)) * scale.X, (xy - wz) * scale.Y, (xz + wy) * scale.Z, position.X,
+                (xy + wz) * scale.X, (1f - (xx + zz)) * scale.Y, (yz - wx) * scale.Z, position.Y,
+                (xz - wy) * scale.X, (yz + wx) * scale.Y, (1f - (xx + yy)) * scale.Z, position.Z,
+                0f, 0f, 0f, 1f);
+        }
+
+        public Vector3 MultiplyPoint(Vector3 point)
+        {
+            float x = m00 * point.X + m01 * point.Y + m02 * point.Z + m03;
+            float y = m10 * point.X + m11 * point.Y + m12 * point.Z + m13;
+            float z = m20 * point.X + m21 * point.Y + m22 * point.Z + m23;
+            float w = m30 * point.X + m31 * point.Y + m32 * point.Z + m33;
+            if (Mathf.Abs(w) > Mathf.Epsilon)
+            {
+                float invW = 1f / w;
+                return new Vector3(x * invW, y * invW, z * invW);
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public Vector3 MultiplyVector(Vector3 vector)
+        {
+            return new Vector3(
+                m00 * vector.X + m01 * vector.Y + m02 * vector.Z,
+                m10 * vector.X + m11 * vector.Y + m12 * vector.Z,
+                m20 * vector.X + m21 * vector.Y + m22 * vector.Z);
+        }
+
+        public static Matrix4x4 operator *(Matrix4x4 lhs, Matrix4x4 rhs)
+        {
+            return new Matrix4x4(
+                lhs.m00 * rhs.m00 + lhs.m01 * rhs.m10 + lhs.m02 * rhs.m20 + lhs.m03 * rhs.m30,
+                lhs.m00 * rhs.m01 + lhs.m01 * rhs.m11 + lhs.m02 * rhs.m21 + lhs.m03 * rhs.m31,
+                lhs.m00 * rhs.m02 + lhs.m01 * rhs.m12 + lhs.m02 * rhs.m22 + lhs.m03 * rhs.m32,
+                lhs.m00 * rhs.m03 + lhs.m01 * rhs.m13 + lhs.m02 * rhs.m23 + lhs.m03 * rhs.m33,
+                lhs.m10 * rhs.m00 + lhs.m11 * rhs.m10 + lhs.m12 * rhs.m20 + lhs.m13 * rhs.m30,
+                lhs.m10 * rhs.m01 + lhs.m11 * rhs.m11 + lhs.m12 * rhs.m21 + lhs.m13 * rhs.m31,
+                lhs.m10 * rhs.m02 + lhs.m11 * rhs.m12 + lhs.m12 * rhs.m22 + lhs.m13 * rhs.m32,
+                lhs.m10 * rhs.m03 + lhs.m11 * rhs.m13 + lhs.m12 * rhs.m23 + lhs.m13 * rhs.m33,
+                lhs.m20 * rhs.m00 + lhs.m21 * rhs.m10 + lhs.m22 * rhs.m20 + lhs.m23 * rhs.m30,
+                lhs.m20 * rhs.m01 + lhs.m21 * rhs.m11 + lhs.m22 * rhs.m21 + lhs.m23 * rhs.m31,
+                lhs.m20 * rhs.m02 + lhs.m21 * rhs.m12 + lhs.m22 * rhs.m22 + lhs.m23 * rhs.m32,
+                lhs.m20 * rhs.m03 + lhs.m21 * rhs.m13 + lhs.m22 * rhs.m23 + lhs.m23 * rhs.m33,
+                lhs.m30 * rhs.m00 + lhs.m31 * rhs.m10 + lhs.m32 * rhs.m20 + lhs.m33 * rhs.m30,
+                lhs.m30 * rhs.m01 + lhs.m31 * rhs.m11 + lhs.m32 * rhs.m21 + lhs.m33 * rhs.m31,
+                lhs.m30 * rhs.m02 + lhs.m31 * rhs.m12 + lhs.m32 * rhs.m22 + lhs.m33 * rhs.m32,
+                lhs.m30 * rhs.m03 + lhs.m31 * rhs.m13 + lhs.m32 * rhs.m23 + lhs.m33 * rhs.m33);
+        }
+
+        public override string ToString()
+        {
+            return $"[{m00}, {m01}, {m02}, {m03}; {m10}, {m11}, {m12}, {m13}; {m20}, {m21}, {m22}, {m23}; {m30}, {m31}, {m32}, {m33}]";
+        }
+    }
+
+    public struct Ray
+    {
+        public Vector3 origin;
+        public Vector3 direction;
+
+        public Ray(Vector3 origin, Vector3 direction)
+        {
+            this.origin = origin;
+            this.direction = direction.normalized;
+        }
+
+        public Vector3 GetPoint(float distance)
+        {
+            return origin + direction * distance;
+        }
+
+        public override string ToString()
+        {
+            return $"Origin: {origin}, Dir: {direction}";
+        }
+    }
+
+    public static class Mathf
+    {
+        public const float PI = MathF.PI;
+        public const float Deg2Rad = PI / 180f;
+        public const float Rad2Deg = 180f / PI;
+        public const float Epsilon = 1e-6f;
+
+        public static float Abs(float value) => MathF.Abs(value);
+        public static int Abs(int value) => Math.Abs(value);
+        public static float Min(float a, float b) => MathF.Min(a, b);
+        public static int Min(int a, int b) => Math.Min(a, b);
+        public static float Max(float a, float b) => MathF.Max(a, b);
+        public static int Max(int a, int b) => Math.Max(a, b);
+        public static float Sign(float value) => value >= 0f ? 1f : -1f;
+        public static float Sqrt(float value) => MathF.Sqrt(value);
+        public static float Sin(float value) => MathF.Sin(value);
+        public static float Cos(float value) => MathF.Cos(value);
+        public static float Tan(float value) => MathF.Tan(value);
+        public static float Asin(float value) => MathF.Asin(value);
+        public static float Acos(float value) => MathF.Acos(value);
+        public static float Atan(float value) => MathF.Atan(value);
+        public static float Atan2(float y, float x) => MathF.Atan2(y, x);
+        public static float Floor(float value) => MathF.Floor(value);
+        public static float Ceil(float value) => MathF.Ceiling(value);
+        public static float Round(float value) => MathF.Round(value);
+        public static int FloorToInt(float value) => (int)MathF.Floor(value);
+        public static int CeilToInt(float value) => (int)MathF.Ceiling(value);
+        public static int RoundToInt(float value) => (int)MathF.Round(value);
+
+        public static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+            {
+                return min;
+            }
+
+            if (value > max)
+            {
+                return max;
+            }
+
+            return value;
+        }
+
+        public static int Clamp(int value, int min, int max)
+        {
+            if (value < min)
+            {
+                return min;
+            }
+
+            if (value > max)
+            {
+                return max;
+            }
+
+            return value;
+        }
+
+        public static float Clamp01(float value)
+        {
+            return Clamp(value, 0f, 1f);
+        }
+
+        public static float Lerp(float a, float b, float t)
+        {
+            return a + (b - a) * Clamp01(t);
+        }
+
+        public static float LerpUnclamped(float a, float b, float t)
+        {
+            return a + (b - a) * t;
+        }
+
+        public static float InverseLerp(float a, float b, float value)
+        {
+            if (Abs(b - a) <= Epsilon)
+            {
+                return 0f;
+            }
+
+            return Clamp01((value - a) / (b - a));
+        }
+
+        public static float Repeat(float t, float length)
+        {
+            if (length <= 0f)
+            {
+                return 0f;
+            }
+
+            return Clamp(t - Floor(t / length) * length, 0f, length);
+        }
+
+        public static float PingPong(float t, float length)
+        {
+            t = Repeat(t, length * 2f);
+            return length - Abs(t - length);
+        }
+
+        public static float DeltaAngle(float current, float target)
+        {
+            float delta = Repeat(target - current, 360f);
+            if (delta > 180f)
+            {
+                delta -= 360f;
+            }
+
+            return delta;
+        }
+
+        public static float LerpAngle(float a, float b, float t)
+        {
+            return a + DeltaAngle(a, b) * Clamp01(t);
+        }
+
+        public static float MoveTowards(float current, float target, float maxDelta)
+        {
+            if (Abs(target - current) <= maxDelta)
+            {
+                return target;
+            }
+
+            return current + Sign(target - current) * maxDelta;
+        }
+
+        public static float MoveTowardsAngle(float current, float target, float maxDelta)
+        {
+            float delta = DeltaAngle(current, target);
+            if (-maxDelta < delta && delta < maxDelta)
+            {
+                return target;
+            }
+
+            target = current + delta;
+            return MoveTowards(current, target, maxDelta);
+        }
+
+        public static bool Approximately(float a, float b)
+        {
+            return Abs(b - a) < Max(1e-6f * Max(Abs(a), Abs(b)), Epsilon * 8f);
+        }
+    }
+
+    public static class Random
+    {
+        private static global::System.Random _random = new();
+
+        public static float value => (float)_random.NextDouble();
+
+        public static void InitState(int seed)
+        {
+            _random = new global::System.Random(seed);
+        }
+
+        public static int Range(int minInclusive, int maxExclusive)
+        {
+            return _random.Next(minInclusive, maxExclusive);
+        }
+
+        public static float Range(float minInclusive, float maxInclusive)
+        {
+            return minInclusive + ((float)_random.NextDouble() * (maxInclusive - minInclusive));
         }
     }
 
@@ -239,14 +1057,32 @@ namespace Infernux
         public void GetComponents<T>(List<T> results) where T : Component
         {
             ArgumentNullException.ThrowIfNull(results);
+            if (gameObject is GameObject owner)
+            {
+                owner.GetComponents(results);
+                return;
+            }
+
             results.Clear();
-            results.AddRange(GetComponents<T>());
         }
 
         public Component[] GetComponents(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
             return gameObject?.GetComponents(type) ?? Array.Empty<Component>();
+        }
+
+        public void GetComponents(Type type, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+            if (gameObject is GameObject owner)
+            {
+                owner.GetComponents(type, results);
+                return;
+            }
+
+            results.Clear();
         }
 
         public T? GetComponentInChildren<T>() where T : Component
@@ -259,6 +1095,22 @@ namespace Infernux
             return gameObject?.GetComponentInChildren<T>(includeInactive);
         }
 
+        public bool TryGetComponentInChildren<T>(out T? component) where T : Component
+        {
+            return TryGetComponentInChildren(false, out component);
+        }
+
+        public bool TryGetComponentInChildren<T>(bool includeInactive, out T? component) where T : Component
+        {
+            if (gameObject is GameObject owner)
+            {
+                return owner.TryGetComponentInChildren(includeInactive, out component);
+            }
+
+            component = null;
+            return false;
+        }
+
         public Component? GetComponentInChildren(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
@@ -269,6 +1121,24 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return gameObject?.GetComponentInChildren(type, includeInactive);
+        }
+
+        public bool TryGetComponentInChildren(Type type, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return TryGetComponentInChildren(type, false, out component);
+        }
+
+        public bool TryGetComponentInChildren(Type type, bool includeInactive, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            if (gameObject is GameObject owner)
+            {
+                return owner.TryGetComponentInChildren(type, includeInactive, out component);
+            }
+
+            component = null;
+            return false;
         }
 
         public T[] GetComponentsInChildren<T>() where T : Component
@@ -310,6 +1180,24 @@ namespace Infernux
             return gameObject?.GetComponentsInChildren(type, includeInactive) ?? Array.Empty<Component>();
         }
 
+        public void GetComponentsInChildren(Type type, List<Component> results)
+        {
+            GetComponentsInChildren(type, false, results);
+        }
+
+        public void GetComponentsInChildren(Type type, bool includeInactive, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+            if (gameObject is GameObject owner)
+            {
+                owner.GetComponentsInChildren(type, includeInactive, results);
+                return;
+            }
+
+            results.Clear();
+        }
+
         public T? GetComponentInParent<T>() where T : Component
         {
             return GetComponentInParent<T>(false);
@@ -318,6 +1206,22 @@ namespace Infernux
         public T? GetComponentInParent<T>(bool includeInactive) where T : Component
         {
             return gameObject?.GetComponentInParent<T>(includeInactive);
+        }
+
+        public bool TryGetComponentInParent<T>(out T? component) where T : Component
+        {
+            return TryGetComponentInParent(false, out component);
+        }
+
+        public bool TryGetComponentInParent<T>(bool includeInactive, out T? component) where T : Component
+        {
+            if (gameObject is GameObject owner)
+            {
+                return owner.TryGetComponentInParent(includeInactive, out component);
+            }
+
+            component = null;
+            return false;
         }
 
         public Component? GetComponentInParent(Type type)
@@ -330,6 +1234,24 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return gameObject?.GetComponentInParent(type, includeInactive);
+        }
+
+        public bool TryGetComponentInParent(Type type, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return TryGetComponentInParent(type, false, out component);
+        }
+
+        public bool TryGetComponentInParent(Type type, bool includeInactive, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            if (gameObject is GameObject owner)
+            {
+                return owner.TryGetComponentInParent(type, includeInactive, out component);
+            }
+
+            component = null;
+            return false;
         }
 
         public T[] GetComponentsInParent<T>() where T : Component
@@ -350,8 +1272,13 @@ namespace Infernux
         public void GetComponentsInParent<T>(bool includeInactive, List<T> results) where T : Component
         {
             ArgumentNullException.ThrowIfNull(results);
+            if (gameObject is GameObject owner)
+            {
+                owner.GetComponentsInParent(includeInactive, results);
+                return;
+            }
+
             results.Clear();
-            results.AddRange(GetComponentsInParent<T>(includeInactive));
         }
 
         public Component[] GetComponentsInParent(Type type)
@@ -364,6 +1291,24 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return gameObject?.GetComponentsInParent(type, includeInactive) ?? Array.Empty<Component>();
+        }
+
+        public void GetComponentsInParent(Type type, List<Component> results)
+        {
+            GetComponentsInParent(type, false, results);
+        }
+
+        public void GetComponentsInParent(Type type, bool includeInactive, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+            if (gameObject is GameObject owner)
+            {
+                owner.GetComponentsInParent(type, includeInactive, results);
+                return;
+            }
+
+            results.Clear();
         }
     }
 
@@ -461,14 +1406,13 @@ namespace Infernux
 
         public bool TryGetComponent<T>(out T? component) where T : Component
         {
-            component = GetComponent<T>();
-            return component is not null;
+            return Managed.ManagedComponentBridge.TryGetGameObjectComponent(this, out component);
         }
 
         public bool TryGetComponent(Type type, out Component? component)
         {
-            component = GetComponent(type);
-            return component is not null;
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.TryGetGameObjectComponent(this, type, out component);
         }
 
         public T[] GetComponents<T>() where T : Component
@@ -479,14 +1423,20 @@ namespace Infernux
         public void GetComponents<T>(List<T> results) where T : Component
         {
             ArgumentNullException.ThrowIfNull(results);
-            results.Clear();
-            results.AddRange(GetComponents<T>());
+            Managed.ManagedComponentBridge.GetGameObjectComponents(this, results);
         }
 
         public Component[] GetComponents(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
             return Managed.ManagedComponentBridge.GetGameObjectComponents(this, type);
+        }
+
+        public void GetComponents(Type type, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+            Managed.ManagedComponentBridge.GetGameObjectComponents(this, type, results);
         }
 
         public T? GetComponentInChildren<T>() where T : Component
@@ -499,6 +1449,16 @@ namespace Infernux
             return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren<T>(this, includeInactive);
         }
 
+        public bool TryGetComponentInChildren<T>(out T? component) where T : Component
+        {
+            return TryGetComponentInChildren(false, out component);
+        }
+
+        public bool TryGetComponentInChildren<T>(bool includeInactive, out T? component) where T : Component
+        {
+            return Managed.ManagedComponentBridge.TryGetGameObjectComponentInChildren(this, includeInactive, out component);
+        }
+
         public Component? GetComponentInChildren(Type type)
         {
             ArgumentNullException.ThrowIfNull(type);
@@ -509,6 +1469,18 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return Managed.ManagedComponentBridge.GetGameObjectComponentInChildren(this, type, includeInactive);
+        }
+
+        public bool TryGetComponentInChildren(Type type, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return TryGetComponentInChildren(type, false, out component);
+        }
+
+        public bool TryGetComponentInChildren(Type type, bool includeInactive, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.TryGetGameObjectComponentInChildren(this, type, includeInactive, out component);
         }
 
         public T[] GetComponentsInChildren<T>() where T : Component
@@ -544,6 +1516,18 @@ namespace Infernux
             return Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren(this, type, includeInactive);
         }
 
+        public void GetComponentsInChildren(Type type, List<Component> results)
+        {
+            GetComponentsInChildren(type, false, results);
+        }
+
+        public void GetComponentsInChildren(Type type, bool includeInactive, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+            Managed.ManagedComponentBridge.GetGameObjectComponentsInChildren(this, type, includeInactive, results);
+        }
+
         public T? GetComponentInParent<T>() where T : Component
         {
             return GetComponentInParent<T>(false);
@@ -552,6 +1536,16 @@ namespace Infernux
         public T? GetComponentInParent<T>(bool includeInactive) where T : Component
         {
             return Managed.ManagedComponentBridge.GetGameObjectComponentInParent<T>(this, includeInactive);
+        }
+
+        public bool TryGetComponentInParent<T>(out T? component) where T : Component
+        {
+            return TryGetComponentInParent(false, out component);
+        }
+
+        public bool TryGetComponentInParent<T>(bool includeInactive, out T? component) where T : Component
+        {
+            return Managed.ManagedComponentBridge.TryGetGameObjectComponentInParent(this, includeInactive, out component);
         }
 
         public Component? GetComponentInParent(Type type)
@@ -564,6 +1558,18 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return Managed.ManagedComponentBridge.GetGameObjectComponentInParent(this, type, includeInactive);
+        }
+
+        public bool TryGetComponentInParent(Type type, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return TryGetComponentInParent(type, false, out component);
+        }
+
+        public bool TryGetComponentInParent(Type type, bool includeInactive, out Component? component)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            return Managed.ManagedComponentBridge.TryGetGameObjectComponentInParent(this, type, includeInactive, out component);
         }
 
         public T[] GetComponentsInParent<T>() where T : Component
@@ -584,8 +1590,7 @@ namespace Infernux
         public void GetComponentsInParent<T>(bool includeInactive, List<T> results) where T : Component
         {
             ArgumentNullException.ThrowIfNull(results);
-            results.Clear();
-            results.AddRange(GetComponentsInParent<T>(includeInactive));
+            Managed.ManagedComponentBridge.GetGameObjectComponentsInParent(this, includeInactive, results);
         }
 
         public Component[] GetComponentsInParent(Type type)
@@ -598,6 +1603,18 @@ namespace Infernux
         {
             ArgumentNullException.ThrowIfNull(type);
             return Managed.ManagedComponentBridge.GetGameObjectComponentsInParent(this, type, includeInactive);
+        }
+
+        public void GetComponentsInParent(Type type, List<Component> results)
+        {
+            GetComponentsInParent(type, false, results);
+        }
+
+        public void GetComponentsInParent(Type type, bool includeInactive, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+            Managed.ManagedComponentBridge.GetGameObjectComponentsInParent(this, type, includeInactive, results);
         }
 
         public static void Destroy(GameObject? target)
@@ -691,6 +1708,8 @@ namespace Infernux
         public Transform? parent => Managed.NativeApi.GetParent(_gameObject.InstanceId);
         public int childCount => Managed.NativeApi.GetChildCount(_gameObject.InstanceId);
         public Vector3 lossyScale => Managed.NativeApi.GetWorldScale(_gameObject.InstanceId);
+        public Matrix4x4 localToWorldMatrix => Matrix4x4.TRS(position, rotation, lossyScale);
+        public Matrix4x4 worldToLocalMatrix => localToWorldMatrix.inverse;
         public Transform root
         {
             get
@@ -704,16 +1723,129 @@ namespace Infernux
                 return current;
             }
         }
-        public Vector3 forward => rotation * ForwardAxis;
-        public Vector3 right => rotation * RightAxis;
-        public Vector3 up => rotation * UpAxis;
+        public bool hasChanged
+        {
+            get => Managed.NativeApi.GetTransformHasChanged(_gameObject.InstanceId);
+            set => Managed.NativeApi.SetTransformHasChanged(_gameObject.InstanceId, value);
+        }
+
+        public Vector3 forward
+        {
+            get => rotation * ForwardAxis;
+            set
+            {
+                if (value.sqrMagnitude <= 1e-12f)
+                {
+                    return;
+                }
+
+                rotation = Quaternion.LookRotation(value, up);
+            }
+        }
+
+        public Vector3 right
+        {
+            get => rotation * RightAxis;
+            set
+            {
+                if (value.sqrMagnitude <= 1e-12f)
+                {
+                    return;
+                }
+
+                Vector3 targetUp = up;
+                Vector3 targetForward = Vector3.Cross(value.normalized, targetUp).normalized;
+                if (targetForward.sqrMagnitude <= 1e-12f)
+                {
+                    return;
+                }
+
+                rotation = Quaternion.LookRotation(targetForward, targetUp);
+            }
+        }
+
+        public Vector3 up
+        {
+            get => rotation * UpAxis;
+            set
+            {
+                if (value.sqrMagnitude <= 1e-12f)
+                {
+                    return;
+                }
+
+                rotation = Quaternion.LookRotation(forward, value);
+            }
+        }
+
         public Vector3 localForward => localRotation * ForwardAxis;
         public Vector3 localRight => localRotation * RightAxis;
         public Vector3 localUp => localRotation * UpAxis;
 
-        public void Translate(Vector3 delta)
+        public void Translate(Vector3 translation)
         {
-            Managed.NativeApi.Translate(_gameObject.InstanceId, delta);
+            Translate(translation, Space.Self);
+        }
+
+        public void Translate(Vector3 translation, Space relativeTo = Space.Self)
+        {
+            if (relativeTo == Space.Self)
+            {
+                Managed.NativeApi.TranslateLocal(_gameObject.InstanceId, translation);
+                return;
+            }
+
+            Managed.NativeApi.Translate(_gameObject.InstanceId, translation);
+        }
+
+        public void Translate(float x, float y, float z)
+        {
+            Translate(new Vector3(x, y, z));
+        }
+
+        public void Translate(float x, float y, float z, Space relativeTo = Space.Self)
+        {
+            Translate(new Vector3(x, y, z), relativeTo);
+        }
+
+        public void Translate(Vector3 translation, Transform? relativeTo)
+        {
+            if (relativeTo is null)
+            {
+                Managed.NativeApi.Translate(_gameObject.InstanceId, translation);
+                return;
+            }
+
+            Managed.NativeApi.Translate(_gameObject.InstanceId, relativeTo.TransformDirection(translation));
+        }
+
+        public void Translate(float x, float y, float z, Transform? relativeTo)
+        {
+            Translate(new Vector3(x, y, z), relativeTo);
+        }
+
+        public void SetPositionAndRotation(Vector3 position, Quaternion rotation)
+        {
+            this.position = position;
+            this.rotation = rotation;
+        }
+
+        public void GetPositionAndRotation(out Vector3 position, out Quaternion rotation)
+        {
+            position = this.position;
+            rotation = this.rotation;
+        }
+
+        public void SetLocalPositionAndRotation(Vector3 localPosition, Quaternion localRotation)
+        {
+            this.localPosition = localPosition;
+            this.localRotation = localRotation;
+        }
+
+        public void GetLocalPositionAndRotation(out Vector3 localPosition, out Quaternion localRotation)
+        {
+            localPosition = this.localPosition;
+            localRotation = this.localRotation;
         }
 
         public void TranslateLocal(Vector3 delta)
@@ -723,12 +1855,44 @@ namespace Infernux
 
         public void Rotate(Vector3 eulerAngles)
         {
-            Managed.NativeApi.Rotate(_gameObject.InstanceId, eulerAngles);
+            Rotate(eulerAngles, Space.Self);
+        }
+
+        public void Rotate(Vector3 eulerAngles, Space relativeTo = Space.Self)
+        {
+            if (relativeTo == Space.Self)
+            {
+                Managed.NativeApi.Rotate(_gameObject.InstanceId, eulerAngles);
+                return;
+            }
+
+            rotation = Quaternion.Euler(eulerAngles) * rotation;
+        }
+
+        public void Rotate(float xAngle, float yAngle, float zAngle)
+        {
+            Rotate(new Vector3(xAngle, yAngle, zAngle));
+        }
+
+        public void Rotate(float xAngle, float yAngle, float zAngle, Space relativeTo = Space.Self)
+        {
+            Rotate(new Vector3(xAngle, yAngle, zAngle), relativeTo);
         }
 
         public void Rotate(Vector3 axis, float angle)
         {
-            Managed.NativeApi.Rotate(_gameObject.InstanceId, axis, angle);
+            Rotate(axis, angle, Space.Self);
+        }
+
+        public void Rotate(Vector3 axis, float angle, Space relativeTo)
+        {
+            if (relativeTo == Space.Self)
+            {
+                Managed.NativeApi.Rotate(_gameObject.InstanceId, axis, angle);
+                return;
+            }
+
+            rotation = Quaternion.AngleAxis(angle, axis) * rotation;
         }
 
         public void RotateAround(Vector3 point, Vector3 axis, float angle)
@@ -739,6 +1903,18 @@ namespace Infernux
         public void LookAt(Vector3 target)
         {
             LookAt(target, UpAxis);
+        }
+
+        public void LookAt(Transform target)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+            LookAt(target.position, UpAxis);
+        }
+
+        public void LookAt(Transform target, Vector3 worldUp)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+            LookAt(target.position, worldUp);
         }
 
         public void LookAt(Vector3 target, Vector3 up)
@@ -836,6 +2012,121 @@ namespace Infernux
         public void SetAsLastSibling()
         {
             SetSiblingIndex(int.MaxValue);
+        }
+    }
+
+    public sealed class Camera : Behaviour
+    {
+        private readonly GameObject _gameObject;
+        private readonly long _componentId;
+
+        internal Camera(GameObject gameObject, long componentId)
+        {
+            _gameObject = gameObject;
+            _componentId = componentId;
+        }
+
+        public static Camera? main => Managed.ManagedComponentBridge.GetMainCamera();
+        public override GameObject gameObject => _gameObject;
+
+        public override bool enabled
+        {
+            get => Managed.NativeApi.GetComponentEnabled(_componentId);
+            set => Managed.NativeApi.SetComponentEnabled(_componentId, value);
+        }
+
+        public override long GetInstanceID()
+        {
+            return _componentId;
+        }
+
+        public CameraProjection projectionMode
+        {
+            get => Managed.NativeApi.GetCameraProjectionMode(_componentId);
+            set => Managed.NativeApi.SetCameraProjectionMode(_componentId, value);
+        }
+
+        public bool orthographic
+        {
+            get => projectionMode == CameraProjection.Orthographic;
+            set => projectionMode = value ? CameraProjection.Orthographic : CameraProjection.Perspective;
+        }
+
+        public float fieldOfView
+        {
+            get => Managed.NativeApi.GetCameraFieldOfView(_componentId);
+            set => Managed.NativeApi.SetCameraFieldOfView(_componentId, value);
+        }
+
+        public float aspect
+        {
+            get => Managed.NativeApi.GetCameraAspect(_componentId);
+            set => Managed.NativeApi.SetCameraAspect(_componentId, value);
+        }
+
+        public float orthographicSize
+        {
+            get => Managed.NativeApi.GetCameraOrthographicSize(_componentId);
+            set => Managed.NativeApi.SetCameraOrthographicSize(_componentId, value);
+        }
+
+        public float nearClipPlane
+        {
+            get => Managed.NativeApi.GetCameraNearClipPlane(_componentId);
+            set => Managed.NativeApi.SetCameraNearClipPlane(_componentId, value);
+        }
+
+        public float farClipPlane
+        {
+            get => Managed.NativeApi.GetCameraFarClipPlane(_componentId);
+            set => Managed.NativeApi.SetCameraFarClipPlane(_componentId, value);
+        }
+
+        public float depth
+        {
+            get => Managed.NativeApi.GetCameraDepth(_componentId);
+            set => Managed.NativeApi.SetCameraDepth(_componentId, value);
+        }
+
+        public int cullingMask
+        {
+            get => Managed.NativeApi.GetCameraCullingMask(_componentId);
+            set => Managed.NativeApi.SetCameraCullingMask(_componentId, value);
+        }
+
+        public CameraClearFlags clearFlags
+        {
+            get => Managed.NativeApi.GetCameraClearFlags(_componentId);
+            set => Managed.NativeApi.SetCameraClearFlags(_componentId, value);
+        }
+
+        public Color backgroundColor
+        {
+            get => Managed.NativeApi.GetCameraBackgroundColor(_componentId);
+            set => Managed.NativeApi.SetCameraBackgroundColor(_componentId, value);
+        }
+
+        public int pixelWidth => Managed.NativeApi.GetCameraPixelWidth(_componentId);
+        public int pixelHeight => Managed.NativeApi.GetCameraPixelHeight(_componentId);
+
+        public Vector3 ScreenToWorldPoint(Vector3 position)
+        {
+            return Managed.NativeApi.CameraScreenToWorldPoint(_componentId, position);
+        }
+
+        public Vector3 WorldToScreenPoint(Vector3 position)
+        {
+            return Managed.NativeApi.CameraWorldToScreenPoint(_componentId, position);
+        }
+
+        public Ray ScreenPointToRay(Vector3 position)
+        {
+            return ScreenPointToRay(new Vector2(position.X, position.Y));
+        }
+
+        public Ray ScreenPointToRay(Vector2 position)
+        {
+            return Managed.NativeApi.CameraScreenPointToRay(_componentId, position);
         }
     }
 
@@ -1171,6 +2462,80 @@ namespace Infernux.Managed
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int DetachChildrenDelegate(long gameObjectId);
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetTransformHasChangedDelegate(long gameObjectId, out int hasChanged);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetTransformHasChangedDelegate(long gameObjectId, int hasChanged);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetComponentEnabledDelegate(long componentId, out int enabled);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate long AddCameraComponentDelegate(long gameObjectId);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate long GetCameraComponentIdDelegate(long gameObjectId);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate long GetMainCameraGameObjectIdDelegate();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetCameraProjectionModeDelegate(long componentId, out int mode);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetCameraProjectionModeDelegate(long componentId, int mode);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetCameraFloatDelegate(long componentId, out float value);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetCameraFloatDelegate(long componentId, float value);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetCameraIntDelegate(long componentId, out int value);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetCameraIntDelegate(long componentId, int value);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int GetCameraColorDelegate(long componentId, out float r, out float g, out float b, out float a);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SetCameraColorDelegate(long componentId, float r, float g, float b, float a);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int CameraScreenToWorldPointDelegate(
+            long componentId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int CameraWorldToScreenPointDelegate(
+            long componentId,
+            float x,
+            float y,
+            float z,
+            out float outX,
+            out float outY,
+            out float outZ);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int CameraScreenPointToRayDelegate(
+            long componentId,
+            float x,
+            float y,
+            out float originX,
+            out float originY,
+            out float originZ,
+            out float directionX,
+            out float directionY,
+            out float directionZ);
+
         private static NativeLogDelegate? _log;
         private static FindGameObjectByNameDelegate? _findGameObjectByName;
         private static CreateGameObjectDelegate? _createGameObject;
@@ -1229,6 +2594,37 @@ namespace Infernux.Managed
         private static GetSiblingIndexDelegate? _getSiblingIndex;
         private static SetSiblingIndexDelegate? _setSiblingIndex;
         private static DetachChildrenDelegate? _detachChildren;
+        private static GetTransformHasChangedDelegate? _getTransformHasChanged;
+        private static SetTransformHasChangedDelegate? _setTransformHasChanged;
+        private static GetComponentEnabledDelegate? _getComponentEnabled;
+        private static AddCameraComponentDelegate? _addCameraComponent;
+        private static GetCameraComponentIdDelegate? _getCameraComponentId;
+        private static GetMainCameraGameObjectIdDelegate? _getMainCameraGameObjectId;
+        private static GetCameraProjectionModeDelegate? _getCameraProjectionMode;
+        private static SetCameraProjectionModeDelegate? _setCameraProjectionMode;
+        private static GetCameraFloatDelegate? _getCameraFieldOfView;
+        private static SetCameraFloatDelegate? _setCameraFieldOfView;
+        private static GetCameraFloatDelegate? _getCameraAspect;
+        private static SetCameraFloatDelegate? _setCameraAspect;
+        private static GetCameraFloatDelegate? _getCameraOrthographicSize;
+        private static SetCameraFloatDelegate? _setCameraOrthographicSize;
+        private static GetCameraFloatDelegate? _getCameraNearClipPlane;
+        private static SetCameraFloatDelegate? _setCameraNearClipPlane;
+        private static GetCameraFloatDelegate? _getCameraFarClipPlane;
+        private static SetCameraFloatDelegate? _setCameraFarClipPlane;
+        private static GetCameraFloatDelegate? _getCameraDepth;
+        private static SetCameraFloatDelegate? _setCameraDepth;
+        private static GetCameraIntDelegate? _getCameraCullingMask;
+        private static SetCameraIntDelegate? _setCameraCullingMask;
+        private static GetCameraIntDelegate? _getCameraClearFlags;
+        private static SetCameraIntDelegate? _setCameraClearFlags;
+        private static GetCameraColorDelegate? _getCameraBackgroundColor;
+        private static SetCameraColorDelegate? _setCameraBackgroundColor;
+        private static GetCameraIntDelegate? _getCameraPixelWidth;
+        private static GetCameraIntDelegate? _getCameraPixelHeight;
+        private static CameraScreenToWorldPointDelegate? _cameraScreenToWorldPoint;
+        private static CameraWorldToScreenPointDelegate? _cameraWorldToScreenPoint;
+        private static CameraScreenPointToRayDelegate? _cameraScreenPointToRay;
 
         public static void Register(
             IntPtr logFn,
@@ -1288,7 +2684,38 @@ namespace Infernux.Managed
             IntPtr findChildFn,
             IntPtr getSiblingIndexFn,
             IntPtr setSiblingIndexFn,
-            IntPtr detachChildrenFn)
+            IntPtr detachChildrenFn,
+            IntPtr getTransformHasChangedFn,
+            IntPtr setTransformHasChangedFn,
+            IntPtr getComponentEnabledFn,
+            IntPtr addCameraComponentFn,
+            IntPtr getCameraComponentIdFn,
+            IntPtr getMainCameraGameObjectIdFn,
+            IntPtr getCameraProjectionModeFn,
+            IntPtr setCameraProjectionModeFn,
+            IntPtr getCameraFieldOfViewFn,
+            IntPtr setCameraFieldOfViewFn,
+            IntPtr getCameraAspectFn,
+            IntPtr setCameraAspectFn,
+            IntPtr getCameraOrthographicSizeFn,
+            IntPtr setCameraOrthographicSizeFn,
+            IntPtr getCameraNearClipPlaneFn,
+            IntPtr setCameraNearClipPlaneFn,
+            IntPtr getCameraFarClipPlaneFn,
+            IntPtr setCameraFarClipPlaneFn,
+            IntPtr getCameraDepthFn,
+            IntPtr setCameraDepthFn,
+            IntPtr getCameraCullingMaskFn,
+            IntPtr setCameraCullingMaskFn,
+            IntPtr getCameraClearFlagsFn,
+            IntPtr setCameraClearFlagsFn,
+            IntPtr getCameraBackgroundColorFn,
+            IntPtr setCameraBackgroundColorFn,
+            IntPtr getCameraPixelWidthFn,
+            IntPtr getCameraPixelHeightFn,
+            IntPtr cameraScreenToWorldPointFn,
+            IntPtr cameraWorldToScreenPointFn,
+            IntPtr cameraScreenPointToRayFn)
         {
             if (logFn == IntPtr.Zero || findGameObjectFn == IntPtr.Zero || createGameObjectFn == IntPtr.Zero ||
                 createPrimitiveFn == IntPtr.Zero || destroyGameObjectFn == IntPtr.Zero ||
@@ -1316,7 +2743,23 @@ namespace Infernux.Managed
                 inverseTransformVectorFn == IntPtr.Zero ||
                 getParentFn == IntPtr.Zero || setParentFn == IntPtr.Zero || getChildCountFn == IntPtr.Zero ||
                 getChildFn == IntPtr.Zero || findChildFn == IntPtr.Zero || getSiblingIndexFn == IntPtr.Zero ||
-                setSiblingIndexFn == IntPtr.Zero || detachChildrenFn == IntPtr.Zero)
+                setSiblingIndexFn == IntPtr.Zero || detachChildrenFn == IntPtr.Zero ||
+                getTransformHasChangedFn == IntPtr.Zero || setTransformHasChangedFn == IntPtr.Zero ||
+                getComponentEnabledFn == IntPtr.Zero || addCameraComponentFn == IntPtr.Zero ||
+                getCameraComponentIdFn == IntPtr.Zero || getMainCameraGameObjectIdFn == IntPtr.Zero ||
+                getCameraProjectionModeFn == IntPtr.Zero || setCameraProjectionModeFn == IntPtr.Zero ||
+                getCameraFieldOfViewFn == IntPtr.Zero || setCameraFieldOfViewFn == IntPtr.Zero ||
+                getCameraAspectFn == IntPtr.Zero || setCameraAspectFn == IntPtr.Zero ||
+                getCameraOrthographicSizeFn == IntPtr.Zero || setCameraOrthographicSizeFn == IntPtr.Zero ||
+                getCameraNearClipPlaneFn == IntPtr.Zero || setCameraNearClipPlaneFn == IntPtr.Zero ||
+                getCameraFarClipPlaneFn == IntPtr.Zero || setCameraFarClipPlaneFn == IntPtr.Zero ||
+                getCameraDepthFn == IntPtr.Zero || setCameraDepthFn == IntPtr.Zero ||
+                getCameraCullingMaskFn == IntPtr.Zero || setCameraCullingMaskFn == IntPtr.Zero ||
+                getCameraClearFlagsFn == IntPtr.Zero || setCameraClearFlagsFn == IntPtr.Zero ||
+                getCameraBackgroundColorFn == IntPtr.Zero || setCameraBackgroundColorFn == IntPtr.Zero ||
+                getCameraPixelWidthFn == IntPtr.Zero || getCameraPixelHeightFn == IntPtr.Zero ||
+                cameraScreenToWorldPointFn == IntPtr.Zero || cameraWorldToScreenPointFn == IntPtr.Zero ||
+                cameraScreenPointToRayFn == IntPtr.Zero)
             {
                 throw new InvalidOperationException("Managed native API registration received a null callback pointer.");
             }
@@ -1398,6 +2841,68 @@ namespace Infernux.Managed
             _getSiblingIndex = Marshal.GetDelegateForFunctionPointer<GetSiblingIndexDelegate>(getSiblingIndexFn);
             _setSiblingIndex = Marshal.GetDelegateForFunctionPointer<SetSiblingIndexDelegate>(setSiblingIndexFn);
             _detachChildren = Marshal.GetDelegateForFunctionPointer<DetachChildrenDelegate>(detachChildrenFn);
+            _getTransformHasChanged =
+                Marshal.GetDelegateForFunctionPointer<GetTransformHasChangedDelegate>(getTransformHasChangedFn);
+            _setTransformHasChanged =
+                Marshal.GetDelegateForFunctionPointer<SetTransformHasChangedDelegate>(setTransformHasChangedFn);
+            _getComponentEnabled =
+                Marshal.GetDelegateForFunctionPointer<GetComponentEnabledDelegate>(getComponentEnabledFn);
+            _addCameraComponent =
+                Marshal.GetDelegateForFunctionPointer<AddCameraComponentDelegate>(addCameraComponentFn);
+            _getCameraComponentId =
+                Marshal.GetDelegateForFunctionPointer<GetCameraComponentIdDelegate>(getCameraComponentIdFn);
+            _getMainCameraGameObjectId =
+                Marshal.GetDelegateForFunctionPointer<GetMainCameraGameObjectIdDelegate>(getMainCameraGameObjectIdFn);
+            _getCameraProjectionMode =
+                Marshal.GetDelegateForFunctionPointer<GetCameraProjectionModeDelegate>(getCameraProjectionModeFn);
+            _setCameraProjectionMode =
+                Marshal.GetDelegateForFunctionPointer<SetCameraProjectionModeDelegate>(setCameraProjectionModeFn);
+            _getCameraFieldOfView =
+                Marshal.GetDelegateForFunctionPointer<GetCameraFloatDelegate>(getCameraFieldOfViewFn);
+            _setCameraFieldOfView =
+                Marshal.GetDelegateForFunctionPointer<SetCameraFloatDelegate>(setCameraFieldOfViewFn);
+            _getCameraAspect =
+                Marshal.GetDelegateForFunctionPointer<GetCameraFloatDelegate>(getCameraAspectFn);
+            _setCameraAspect =
+                Marshal.GetDelegateForFunctionPointer<SetCameraFloatDelegate>(setCameraAspectFn);
+            _getCameraOrthographicSize =
+                Marshal.GetDelegateForFunctionPointer<GetCameraFloatDelegate>(getCameraOrthographicSizeFn);
+            _setCameraOrthographicSize =
+                Marshal.GetDelegateForFunctionPointer<SetCameraFloatDelegate>(setCameraOrthographicSizeFn);
+            _getCameraNearClipPlane =
+                Marshal.GetDelegateForFunctionPointer<GetCameraFloatDelegate>(getCameraNearClipPlaneFn);
+            _setCameraNearClipPlane =
+                Marshal.GetDelegateForFunctionPointer<SetCameraFloatDelegate>(setCameraNearClipPlaneFn);
+            _getCameraFarClipPlane =
+                Marshal.GetDelegateForFunctionPointer<GetCameraFloatDelegate>(getCameraFarClipPlaneFn);
+            _setCameraFarClipPlane =
+                Marshal.GetDelegateForFunctionPointer<SetCameraFloatDelegate>(setCameraFarClipPlaneFn);
+            _getCameraDepth =
+                Marshal.GetDelegateForFunctionPointer<GetCameraFloatDelegate>(getCameraDepthFn);
+            _setCameraDepth =
+                Marshal.GetDelegateForFunctionPointer<SetCameraFloatDelegate>(setCameraDepthFn);
+            _getCameraCullingMask =
+                Marshal.GetDelegateForFunctionPointer<GetCameraIntDelegate>(getCameraCullingMaskFn);
+            _setCameraCullingMask =
+                Marshal.GetDelegateForFunctionPointer<SetCameraIntDelegate>(setCameraCullingMaskFn);
+            _getCameraClearFlags =
+                Marshal.GetDelegateForFunctionPointer<GetCameraIntDelegate>(getCameraClearFlagsFn);
+            _setCameraClearFlags =
+                Marshal.GetDelegateForFunctionPointer<SetCameraIntDelegate>(setCameraClearFlagsFn);
+            _getCameraBackgroundColor =
+                Marshal.GetDelegateForFunctionPointer<GetCameraColorDelegate>(getCameraBackgroundColorFn);
+            _setCameraBackgroundColor =
+                Marshal.GetDelegateForFunctionPointer<SetCameraColorDelegate>(setCameraBackgroundColorFn);
+            _getCameraPixelWidth =
+                Marshal.GetDelegateForFunctionPointer<GetCameraIntDelegate>(getCameraPixelWidthFn);
+            _getCameraPixelHeight =
+                Marshal.GetDelegateForFunctionPointer<GetCameraIntDelegate>(getCameraPixelHeightFn);
+            _cameraScreenToWorldPoint =
+                Marshal.GetDelegateForFunctionPointer<CameraScreenToWorldPointDelegate>(cameraScreenToWorldPointFn);
+            _cameraWorldToScreenPoint =
+                Marshal.GetDelegateForFunctionPointer<CameraWorldToScreenPointDelegate>(cameraWorldToScreenPointFn);
+            _cameraScreenPointToRay =
+                Marshal.GetDelegateForFunctionPointer<CameraScreenPointToRayDelegate>(cameraScreenPointToRayFn);
         }
 
         public static void Log(int level, object? message)
@@ -1579,6 +3084,18 @@ namespace Infernux.Managed
             return callback(gameObjectId);
         }
 
+        public static bool GetComponentEnabled(long componentId)
+        {
+            GetComponentEnabledDelegate callback =
+                _getComponentEnabled ?? throw new InvalidOperationException("Native Component.enabled getter is not registered.");
+            if (callback(componentId, out int enabled) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read enabled state for Component {componentId}.");
+            }
+
+            return enabled != 0;
+        }
+
         public static void SetComponentEnabled(long componentId, bool enabled)
         {
             SetComponentEnabledDelegate callback =
@@ -1609,6 +3126,318 @@ namespace Infernux.Managed
             }
 
             return new Vector3(x, y, z);
+        }
+
+        public static long AddCameraComponent(long gameObjectId)
+        {
+            AddCameraComponentDelegate callback =
+                _addCameraComponent ?? throw new InvalidOperationException("Native GameObject.AddComponent(Camera) is not registered.");
+            return callback(gameObjectId);
+        }
+
+        public static long GetCameraComponentId(long gameObjectId)
+        {
+            GetCameraComponentIdDelegate callback =
+                _getCameraComponentId ?? throw new InvalidOperationException("Native GameObject.GetComponent(Camera) is not registered.");
+            return callback(gameObjectId);
+        }
+
+        public static long GetMainCameraGameObjectId()
+        {
+            GetMainCameraGameObjectIdDelegate callback =
+                _getMainCameraGameObjectId ?? throw new InvalidOperationException("Native Camera.main is not registered.");
+            return callback();
+        }
+
+        public static CameraProjection GetCameraProjectionMode(long componentId)
+        {
+            GetCameraProjectionModeDelegate callback =
+                _getCameraProjectionMode ?? throw new InvalidOperationException("Native Camera.projectionMode getter is not registered.");
+            if (callback(componentId, out int mode) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read projection mode for Camera {componentId}.");
+            }
+
+            return (CameraProjection)mode;
+        }
+
+        public static void SetCameraProjectionMode(long componentId, CameraProjection mode)
+        {
+            SetCameraProjectionModeDelegate callback =
+                _setCameraProjectionMode ?? throw new InvalidOperationException("Native Camera.projectionMode setter is not registered.");
+            if (callback(componentId, (int)mode) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set projection mode for Camera {componentId}.");
+            }
+        }
+
+        public static float GetCameraFieldOfView(long componentId)
+        {
+            GetCameraFloatDelegate callback =
+                _getCameraFieldOfView ?? throw new InvalidOperationException("Native Camera.fieldOfView getter is not registered.");
+            if (callback(componentId, out float value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read fieldOfView for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraFieldOfView(long componentId, float value)
+        {
+            SetCameraFloatDelegate callback =
+                _setCameraFieldOfView ?? throw new InvalidOperationException("Native Camera.fieldOfView setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set fieldOfView for Camera {componentId}.");
+            }
+        }
+
+        public static float GetCameraAspect(long componentId)
+        {
+            GetCameraFloatDelegate callback =
+                _getCameraAspect ?? throw new InvalidOperationException("Native Camera.aspect getter is not registered.");
+            if (callback(componentId, out float value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read aspect for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraAspect(long componentId, float value)
+        {
+            SetCameraFloatDelegate callback =
+                _setCameraAspect ?? throw new InvalidOperationException("Native Camera.aspect setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set aspect for Camera {componentId}.");
+            }
+        }
+
+        public static float GetCameraOrthographicSize(long componentId)
+        {
+            GetCameraFloatDelegate callback =
+                _getCameraOrthographicSize ?? throw new InvalidOperationException("Native Camera.orthographicSize getter is not registered.");
+            if (callback(componentId, out float value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read orthographicSize for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraOrthographicSize(long componentId, float value)
+        {
+            SetCameraFloatDelegate callback =
+                _setCameraOrthographicSize ?? throw new InvalidOperationException("Native Camera.orthographicSize setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set orthographicSize for Camera {componentId}.");
+            }
+        }
+
+        public static float GetCameraNearClipPlane(long componentId)
+        {
+            GetCameraFloatDelegate callback =
+                _getCameraNearClipPlane ?? throw new InvalidOperationException("Native Camera.nearClipPlane getter is not registered.");
+            if (callback(componentId, out float value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read nearClipPlane for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraNearClipPlane(long componentId, float value)
+        {
+            SetCameraFloatDelegate callback =
+                _setCameraNearClipPlane ?? throw new InvalidOperationException("Native Camera.nearClipPlane setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set nearClipPlane for Camera {componentId}.");
+            }
+        }
+
+        public static float GetCameraFarClipPlane(long componentId)
+        {
+            GetCameraFloatDelegate callback =
+                _getCameraFarClipPlane ?? throw new InvalidOperationException("Native Camera.farClipPlane getter is not registered.");
+            if (callback(componentId, out float value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read farClipPlane for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraFarClipPlane(long componentId, float value)
+        {
+            SetCameraFloatDelegate callback =
+                _setCameraFarClipPlane ?? throw new InvalidOperationException("Native Camera.farClipPlane setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set farClipPlane for Camera {componentId}.");
+            }
+        }
+
+        public static float GetCameraDepth(long componentId)
+        {
+            GetCameraFloatDelegate callback =
+                _getCameraDepth ?? throw new InvalidOperationException("Native Camera.depth getter is not registered.");
+            if (callback(componentId, out float value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read depth for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraDepth(long componentId, float value)
+        {
+            SetCameraFloatDelegate callback =
+                _setCameraDepth ?? throw new InvalidOperationException("Native Camera.depth setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set depth for Camera {componentId}.");
+            }
+        }
+
+        public static int GetCameraCullingMask(long componentId)
+        {
+            GetCameraIntDelegate callback =
+                _getCameraCullingMask ?? throw new InvalidOperationException("Native Camera.cullingMask getter is not registered.");
+            if (callback(componentId, out int value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read cullingMask for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static void SetCameraCullingMask(long componentId, int value)
+        {
+            SetCameraIntDelegate callback =
+                _setCameraCullingMask ?? throw new InvalidOperationException("Native Camera.cullingMask setter is not registered.");
+            if (callback(componentId, value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set cullingMask for Camera {componentId}.");
+            }
+        }
+
+        public static CameraClearFlags GetCameraClearFlags(long componentId)
+        {
+            GetCameraIntDelegate callback =
+                _getCameraClearFlags ?? throw new InvalidOperationException("Native Camera.clearFlags getter is not registered.");
+            if (callback(componentId, out int value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read clearFlags for Camera {componentId}.");
+            }
+
+            return (CameraClearFlags)value;
+        }
+
+        public static void SetCameraClearFlags(long componentId, CameraClearFlags value)
+        {
+            SetCameraIntDelegate callback =
+                _setCameraClearFlags ?? throw new InvalidOperationException("Native Camera.clearFlags setter is not registered.");
+            if (callback(componentId, (int)value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set clearFlags for Camera {componentId}.");
+            }
+        }
+
+        public static Color GetCameraBackgroundColor(long componentId)
+        {
+            GetCameraColorDelegate callback =
+                _getCameraBackgroundColor ?? throw new InvalidOperationException("Native Camera.backgroundColor getter is not registered.");
+            if (callback(componentId, out float r, out float g, out float b, out float a) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read backgroundColor for Camera {componentId}.");
+            }
+
+            return new Color(r, g, b, a);
+        }
+
+        public static void SetCameraBackgroundColor(long componentId, Color value)
+        {
+            SetCameraColorDelegate callback =
+                _setCameraBackgroundColor ?? throw new InvalidOperationException("Native Camera.backgroundColor setter is not registered.");
+            if (callback(componentId, value.r, value.g, value.b, value.a) != 0)
+            {
+                throw new InvalidOperationException($"Failed to set backgroundColor for Camera {componentId}.");
+            }
+        }
+
+        public static int GetCameraPixelWidth(long componentId)
+        {
+            GetCameraIntDelegate callback =
+                _getCameraPixelWidth ?? throw new InvalidOperationException("Native Camera.pixelWidth getter is not registered.");
+            if (callback(componentId, out int value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read pixelWidth for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static int GetCameraPixelHeight(long componentId)
+        {
+            GetCameraIntDelegate callback =
+                _getCameraPixelHeight ?? throw new InvalidOperationException("Native Camera.pixelHeight getter is not registered.");
+            if (callback(componentId, out int value) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read pixelHeight for Camera {componentId}.");
+            }
+
+            return value;
+        }
+
+        public static Vector3 CameraScreenToWorldPoint(long componentId, Vector3 position)
+        {
+            CameraScreenToWorldPointDelegate callback =
+                _cameraScreenToWorldPoint ?? throw new InvalidOperationException("Native Camera.ScreenToWorldPoint is not registered.");
+            if (callback(componentId, position.X, position.Y, position.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to convert screen point to world point for Camera {componentId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Vector3 CameraWorldToScreenPoint(long componentId, Vector3 position)
+        {
+            CameraWorldToScreenPointDelegate callback =
+                _cameraWorldToScreenPoint ?? throw new InvalidOperationException("Native Camera.WorldToScreenPoint is not registered.");
+            if (callback(componentId, position.X, position.Y, position.Z, out float x, out float y, out float z) != 0)
+            {
+                throw new InvalidOperationException($"Failed to convert world point to screen point for Camera {componentId}.");
+            }
+
+            return new Vector3(x, y, z);
+        }
+
+        public static Ray CameraScreenPointToRay(long componentId, Vector2 position)
+        {
+            CameraScreenPointToRayDelegate callback =
+                _cameraScreenPointToRay ?? throw new InvalidOperationException("Native Camera.ScreenPointToRay is not registered.");
+            if (callback(
+                    componentId,
+                    position.X,
+                    position.Y,
+                    out float originX,
+                    out float originY,
+                    out float originZ,
+                    out float directionX,
+                    out float directionY,
+                    out float directionZ) != 0)
+            {
+                throw new InvalidOperationException($"Failed to build screen ray for Camera {componentId}.");
+            }
+
+            return new Ray(
+                new Vector3(originX, originY, originZ),
+                new Vector3(directionX, directionY, directionZ));
         }
 
         public static void SetWorldPosition(long gameObjectId, Vector3 position)
@@ -2164,6 +3993,28 @@ namespace Infernux.Managed
                 throw new InvalidOperationException($"Failed to detach children for GameObject {gameObjectId}.");
             }
         }
+
+        public static bool GetTransformHasChanged(long gameObjectId)
+        {
+            GetTransformHasChangedDelegate callback =
+                _getTransformHasChanged ?? throw new InvalidOperationException("Native transform.hasChanged getter is not registered.");
+            if (callback(gameObjectId, out int hasChanged) != 0)
+            {
+                throw new InvalidOperationException($"Failed to read hasChanged for GameObject {gameObjectId}.");
+            }
+
+            return hasChanged != 0;
+        }
+
+        public static void SetTransformHasChanged(long gameObjectId, bool hasChanged)
+        {
+            SetTransformHasChangedDelegate callback =
+                _setTransformHasChanged ?? throw new InvalidOperationException("Native transform.hasChanged setter is not registered.");
+            if (callback(gameObjectId, hasChanged ? 1 : 0) != 0)
+            {
+                throw new InvalidOperationException($"Failed to write hasChanged for GameObject {gameObjectId}.");
+            }
+        }
     }
 
     internal enum ManagedLifecycleEvent
@@ -2183,6 +4034,7 @@ namespace Infernux.Managed
     public static class ManagedComponentBridge
     {
         private static readonly Dictionary<long, MonoBehaviour> Components = new();
+        private static readonly Dictionary<long, Camera> NativeCameras = new();
         private static readonly Dictionary<string, Type> TypeCache = new(StringComparer.Ordinal);
         private static long _nextHandle;
 
@@ -2324,6 +4176,37 @@ namespace Infernux.Managed
             IntPtr getSiblingIndexFn,
             IntPtr setSiblingIndexFn,
             IntPtr detachChildrenFn,
+            IntPtr getTransformHasChangedFn,
+            IntPtr setTransformHasChangedFn,
+            IntPtr getComponentEnabledFn,
+            IntPtr addCameraComponentFn,
+            IntPtr getCameraComponentIdFn,
+            IntPtr getMainCameraGameObjectIdFn,
+            IntPtr getCameraProjectionModeFn,
+            IntPtr setCameraProjectionModeFn,
+            IntPtr getCameraFieldOfViewFn,
+            IntPtr setCameraFieldOfViewFn,
+            IntPtr getCameraAspectFn,
+            IntPtr setCameraAspectFn,
+            IntPtr getCameraOrthographicSizeFn,
+            IntPtr setCameraOrthographicSizeFn,
+            IntPtr getCameraNearClipPlaneFn,
+            IntPtr setCameraNearClipPlaneFn,
+            IntPtr getCameraFarClipPlaneFn,
+            IntPtr setCameraFarClipPlaneFn,
+            IntPtr getCameraDepthFn,
+            IntPtr setCameraDepthFn,
+            IntPtr getCameraCullingMaskFn,
+            IntPtr setCameraCullingMaskFn,
+            IntPtr getCameraClearFlagsFn,
+            IntPtr setCameraClearFlagsFn,
+            IntPtr getCameraBackgroundColorFn,
+            IntPtr setCameraBackgroundColorFn,
+            IntPtr getCameraPixelWidthFn,
+            IntPtr getCameraPixelHeightFn,
+            IntPtr cameraScreenToWorldPointFn,
+            IntPtr cameraWorldToScreenPointFn,
+            IntPtr cameraScreenPointToRayFn,
             IntPtr errorUtf8,
             int errorUtf8Capacity)
         {
@@ -2387,7 +4270,38 @@ namespace Infernux.Managed
                     findChildFn,
                     getSiblingIndexFn,
                     setSiblingIndexFn,
-                    detachChildrenFn);
+                    detachChildrenFn,
+                    getTransformHasChangedFn,
+                    setTransformHasChangedFn,
+                    getComponentEnabledFn,
+                    addCameraComponentFn,
+                    getCameraComponentIdFn,
+                    getMainCameraGameObjectIdFn,
+                    getCameraProjectionModeFn,
+                    setCameraProjectionModeFn,
+                    getCameraFieldOfViewFn,
+                    setCameraFieldOfViewFn,
+                    getCameraAspectFn,
+                    setCameraAspectFn,
+                    getCameraOrthographicSizeFn,
+                    setCameraOrthographicSizeFn,
+                    getCameraNearClipPlaneFn,
+                    setCameraNearClipPlaneFn,
+                    getCameraFarClipPlaneFn,
+                    setCameraFarClipPlaneFn,
+                    getCameraDepthFn,
+                    setCameraDepthFn,
+                    getCameraCullingMaskFn,
+                    setCameraCullingMaskFn,
+                    getCameraClearFlagsFn,
+                    setCameraClearFlagsFn,
+                    getCameraBackgroundColorFn,
+                    setCameraBackgroundColorFn,
+                    getCameraPixelWidthFn,
+                    getCameraPixelHeightFn,
+                    cameraScreenToWorldPointFn,
+                    cameraWorldToScreenPointFn,
+                    cameraScreenPointToRayFn);
                 return 0;
             }
             catch (Exception ex)
@@ -2477,6 +4391,7 @@ namespace Infernux.Managed
             {
                 GameObject gameObject => (T?)(Object?)GameObject.Instantiate(gameObject, parent),
                 Transform transform => (T?)(Object?)InstantiateTransform(transform, parent),
+                Camera camera => (T?)(Object?)InstantiateCamera(camera, parent),
                 MonoBehaviour behaviour => InstantiateMonoBehaviour(original, behaviour, parent),
                 _ => throw new NotSupportedException(
                     $"Instantiate does not support '{original.GetType().FullName}'."),
@@ -2488,10 +4403,16 @@ namespace Infernux.Managed
             ArgumentNullException.ThrowIfNull(gameObject);
             ArgumentNullException.ThrowIfNull(type);
 
+            if (type == typeof(Camera))
+            {
+                long componentId = NativeApi.AddCameraComponent(gameObject.InstanceId);
+                return componentId != 0 ? GetOrCreateCamera(gameObject, componentId) : null;
+            }
+
             if (!typeof(MonoBehaviour).IsAssignableFrom(type) || type.IsAbstract)
             {
                 throw new ArgumentException(
-                    $"AddComponent(Type) requires a concrete MonoBehaviour type, got '{type.FullName}'.", nameof(type));
+                    $"AddComponent(Type) requires a supported concrete component type, got '{type.FullName}'.", nameof(type));
             }
 
             long handle = NativeApi.AddManagedComponent(gameObject.InstanceId, GetManagedTypeNameForLookup(type));
@@ -2501,13 +4422,13 @@ namespace Infernux.Managed
         internal static T? GetGameObjectComponent<T>(GameObject gameObject) where T : Component
         {
             ArgumentNullException.ThrowIfNull(gameObject);
+            return GetGameObjectComponent(gameObject, typeof(T)) as T;
+        }
 
-            if (typeof(T).IsAssignableFrom(typeof(Transform)))
-            {
-                return gameObject.transform as T;
-            }
-
-            return GetManagedGameObjectComponent<T>(gameObject);
+        internal static bool TryGetGameObjectComponent<T>(GameObject gameObject, out T? component) where T : Component
+        {
+            component = GetGameObjectComponent<T>(gameObject);
+            return component is not null;
         }
 
         internal static T[] GetGameObjectComponents<T>(GameObject gameObject) where T : Component
@@ -2522,6 +4443,19 @@ namespace Infernux.Managed
             return typed;
         }
 
+        internal static void GetGameObjectComponents<T>(GameObject gameObject, List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(results);
+
+            results.Clear();
+            Component[] components = GetGameObjectComponents(gameObject, typeof(T));
+            for (int i = 0; i < components.Length; i++)
+            {
+                results.Add((T)components[i]);
+            }
+        }
+
         internal static Component? GetGameObjectComponent(GameObject gameObject, Type type)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
@@ -2533,12 +4467,15 @@ namespace Infernux.Managed
                     $"GetComponent(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
             }
 
-            if (type.IsAssignableFrom(typeof(Transform)))
-            {
-                return gameObject.transform;
-            }
+            List<Component> results = new();
+            CollectComponentsOnGameObject(gameObject, type, results);
+            return results.Count > 0 ? results[0] : null;
+        }
 
-            return GetManagedGameObjectComponent(gameObject, type);
+        internal static bool TryGetGameObjectComponent(GameObject gameObject, Type type, out Component? component)
+        {
+            component = GetGameObjectComponent(gameObject, type);
+            return component is not null;
         }
 
         internal static Component[] GetGameObjectComponents(GameObject gameObject, Type type)
@@ -2557,21 +4494,42 @@ namespace Infernux.Managed
             return results.ToArray();
         }
 
+        internal static void GetGameObjectComponents(GameObject gameObject, Type type, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponents(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
+            results.Clear();
+            CollectComponentsOnGameObject(gameObject, type, results);
+        }
+
         internal static T? GetGameObjectComponentInChildren<T>(GameObject gameObject) where T : Component
         {
             return GetGameObjectComponentInChildren<T>(gameObject, false);
         }
 
+        internal static bool TryGetGameObjectComponentInChildren<T>(GameObject gameObject, out T? component) where T : Component
+        {
+            return TryGetGameObjectComponentInChildren(gameObject, false, out component);
+        }
+
         internal static T? GetGameObjectComponentInChildren<T>(GameObject gameObject, bool includeInactive) where T : Component
         {
             ArgumentNullException.ThrowIfNull(gameObject);
+            return GetGameObjectComponentInChildren(gameObject, typeof(T), includeInactive) as T;
+        }
 
-            if (typeof(T).IsAssignableFrom(typeof(Transform)))
-            {
-                return gameObject.transform as T;
-            }
-
-            return GetManagedGameObjectComponentInChildren<T>(gameObject, includeInactive);
+        internal static bool TryGetGameObjectComponentInChildren<T>(GameObject gameObject, bool includeInactive, out T? component) where T : Component
+        {
+            component = GetGameObjectComponentInChildren<T>(gameObject, includeInactive);
+            return component is not null;
         }
 
         internal static T[] GetGameObjectComponentsInChildren<T>(GameObject gameObject) where T : Component
@@ -2614,6 +4572,11 @@ namespace Infernux.Managed
             return GetGameObjectComponentInChildren(gameObject, type, false);
         }
 
+        internal static bool TryGetGameObjectComponentInChildren(GameObject gameObject, Type type, out Component? component)
+        {
+            return TryGetGameObjectComponentInChildren(gameObject, type, false, out component);
+        }
+
         internal static Component? GetGameObjectComponentInChildren(GameObject gameObject, Type type, bool includeInactive)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
@@ -2625,17 +4588,41 @@ namespace Infernux.Managed
                     $"GetComponentInChildren(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
             }
 
-            if (type.IsAssignableFrom(typeof(Transform)))
-            {
-                return gameObject.transform;
-            }
+            List<Component> results = new();
+            CollectComponentsInChildren(gameObject, type, includeInactive, true, results);
+            return results.Count > 0 ? results[0] : null;
+        }
 
-            return GetManagedGameObjectComponentInChildren(gameObject, type, includeInactive);
+        internal static bool TryGetGameObjectComponentInChildren(GameObject gameObject, Type type, bool includeInactive, out Component? component)
+        {
+            component = GetGameObjectComponentInChildren(gameObject, type, includeInactive);
+            return component is not null;
         }
 
         internal static Component[] GetGameObjectComponentsInChildren(GameObject gameObject, Type type)
         {
             return GetGameObjectComponentsInChildren(gameObject, type, false);
+        }
+
+        internal static void GetGameObjectComponentsInChildren(GameObject gameObject, Type type, List<Component> results)
+        {
+            GetGameObjectComponentsInChildren(gameObject, type, false, results);
+        }
+
+        internal static void GetGameObjectComponentsInChildren(GameObject gameObject, Type type, bool includeInactive, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponentsInChildren(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
+            results.Clear();
+            CollectComponentsInChildren(gameObject, type, includeInactive, true, results);
         }
 
         internal static Component[] GetGameObjectComponentsInChildren(GameObject gameObject, Type type, bool includeInactive)
@@ -2659,21 +4646,44 @@ namespace Infernux.Managed
             return GetGameObjectComponentInParent<T>(gameObject, false);
         }
 
+        internal static bool TryGetGameObjectComponentInParent<T>(GameObject gameObject, out T? component) where T : Component
+        {
+            return TryGetGameObjectComponentInParent(gameObject, false, out component);
+        }
+
         internal static T? GetGameObjectComponentInParent<T>(GameObject gameObject, bool includeInactive) where T : Component
         {
             ArgumentNullException.ThrowIfNull(gameObject);
+            return GetGameObjectComponentInParent(gameObject, typeof(T), includeInactive) as T;
+        }
 
-            if (typeof(T).IsAssignableFrom(typeof(Transform)))
-            {
-                return gameObject.transform as T;
-            }
-
-            return GetManagedGameObjectComponentInParent<T>(gameObject, includeInactive);
+        internal static bool TryGetGameObjectComponentInParent<T>(GameObject gameObject, bool includeInactive, out T? component) where T : Component
+        {
+            component = GetGameObjectComponentInParent<T>(gameObject, includeInactive);
+            return component is not null;
         }
 
         internal static T[] GetGameObjectComponentsInParent<T>(GameObject gameObject) where T : Component
         {
             return GetGameObjectComponentsInParent<T>(gameObject, false);
+        }
+
+        internal static void GetGameObjectComponentsInParent<T>(GameObject gameObject, List<T> results) where T : Component
+        {
+            GetGameObjectComponentsInParent(gameObject, false, results);
+        }
+
+        internal static void GetGameObjectComponentsInParent<T>(GameObject gameObject, bool includeInactive, List<T> results) where T : Component
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(results);
+
+            results.Clear();
+            Component[] components = GetGameObjectComponentsInParent(gameObject, typeof(T), includeInactive);
+            for (int i = 0; i < components.Length; i++)
+            {
+                results.Add((T)components[i]);
+            }
         }
 
         internal static T[] GetGameObjectComponentsInParent<T>(GameObject gameObject, bool includeInactive) where T : Component
@@ -2693,6 +4703,11 @@ namespace Infernux.Managed
             return GetGameObjectComponentInParent(gameObject, type, false);
         }
 
+        internal static bool TryGetGameObjectComponentInParent(GameObject gameObject, Type type, out Component? component)
+        {
+            return TryGetGameObjectComponentInParent(gameObject, type, false, out component);
+        }
+
         internal static Component? GetGameObjectComponentInParent(GameObject gameObject, Type type, bool includeInactive)
         {
             ArgumentNullException.ThrowIfNull(gameObject);
@@ -2704,17 +4719,41 @@ namespace Infernux.Managed
                     $"GetComponentInParent(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
             }
 
-            if (type.IsAssignableFrom(typeof(Transform)))
-            {
-                return gameObject.transform;
-            }
+            List<Component> results = new();
+            CollectComponentsInParent(gameObject, type, includeInactive, true, results);
+            return results.Count > 0 ? results[0] : null;
+        }
 
-            return GetManagedGameObjectComponentInParent(gameObject, type, includeInactive);
+        internal static bool TryGetGameObjectComponentInParent(GameObject gameObject, Type type, bool includeInactive, out Component? component)
+        {
+            component = GetGameObjectComponentInParent(gameObject, type, includeInactive);
+            return component is not null;
         }
 
         internal static Component[] GetGameObjectComponentsInParent(GameObject gameObject, Type type)
         {
             return GetGameObjectComponentsInParent(gameObject, type, false);
+        }
+
+        internal static void GetGameObjectComponentsInParent(GameObject gameObject, Type type, List<Component> results)
+        {
+            GetGameObjectComponentsInParent(gameObject, type, false, results);
+        }
+
+        internal static void GetGameObjectComponentsInParent(GameObject gameObject, Type type, bool includeInactive, List<Component> results)
+        {
+            ArgumentNullException.ThrowIfNull(gameObject);
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(results);
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                throw new ArgumentException(
+                    $"GetComponentsInParent(Type) requires a Component-derived type, got '{type.FullName}'.", nameof(type));
+            }
+
+            results.Clear();
+            CollectComponentsInParent(gameObject, type, includeInactive, true, results);
         }
 
         internal static Component[] GetGameObjectComponentsInParent(GameObject gameObject, Type type, bool includeInactive)
@@ -2815,6 +4854,14 @@ namespace Infernux.Managed
                 throw new InvalidOperationException("Failed to instantiate Transform owner GameObject.");
         }
 
+        private static Camera? InstantiateCamera(Camera camera, Transform? parent)
+        {
+            GameObject owner = camera.gameObject ??
+                throw new InvalidOperationException("Camera has no owning GameObject.");
+            GameObject? clone = GameObject.Instantiate(owner, parent);
+            return clone?.GetComponent<Camera>();
+        }
+
         private static T? InstantiateMonoBehaviour<T>(T original, MonoBehaviour behaviour, Transform? parent) where T : Object
         {
             GameObject owner = behaviour.gameObject ??
@@ -2834,6 +4881,12 @@ namespace Infernux.Managed
             if (expectedType.IsAssignableFrom(typeof(Transform)))
             {
                 results.Add(gameObject.transform);
+            }
+
+            Camera? camera = GetNativeCameraOnGameObject(gameObject);
+            if (camera is not null && expectedType.IsInstanceOfType(camera))
+            {
+                results.Add(camera);
             }
 
             foreach (MonoBehaviour candidate in EnumerateManagedComponentsOnGameObject(gameObject.InstanceId))
@@ -2895,6 +4948,37 @@ namespace Infernux.Managed
                 return leftId.CompareTo(rightId);
             });
             return matches;
+        }
+
+        internal static Camera? GetMainCamera()
+        {
+            long gameObjectId = NativeApi.GetMainCameraGameObjectId();
+            if (gameObjectId == 0)
+            {
+                return null;
+            }
+
+            GameObject gameObject = new(gameObjectId);
+            long componentId = NativeApi.GetCameraComponentId(gameObjectId);
+            return componentId != 0 ? GetOrCreateCamera(gameObject, componentId) : null;
+        }
+
+        private static Camera? GetNativeCameraOnGameObject(GameObject gameObject)
+        {
+            long componentId = NativeApi.GetCameraComponentId(gameObject.InstanceId);
+            return componentId != 0 ? GetOrCreateCamera(gameObject, componentId) : null;
+        }
+
+        private static Camera GetOrCreateCamera(GameObject gameObject, long componentId)
+        {
+            if (NativeCameras.TryGetValue(componentId, out Camera? camera))
+            {
+                return camera;
+            }
+
+            camera = new Camera(gameObject, componentId);
+            NativeCameras[componentId] = camera;
+            return camera;
         }
 
         private static MonoBehaviour? FindManagedComponentOnGameObject(long gameObjectId, Type expectedType)

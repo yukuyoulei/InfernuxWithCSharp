@@ -13,6 +13,7 @@
 
 #include <core/config/InxPlatform.h>
 #include <core/log/InxLog.h>
+#include <function/scene/Camera.h>
 #include <function/scene/GameObject.h>
 #include <function/scene/ManagedComponentProxy.h>
 #include <function/scene/MeshRenderer.h>
@@ -64,8 +65,28 @@ using get_managed_component_fn = int64_t(__cdecl *)(int64_t game_object_id, cons
 using get_managed_component_in_children_fn = int64_t(__cdecl *)(int64_t game_object_id, const char *type_name_utf8);
 using get_managed_component_in_parent_fn = int64_t(__cdecl *)(int64_t game_object_id, const char *type_name_utf8);
 using get_transform_component_id_fn = int64_t(__cdecl *)(int64_t game_object_id);
+using get_component_enabled_fn = int32_t(__cdecl *)(int64_t component_id, int32_t *enabled_out);
 using set_component_enabled_fn = int32_t(__cdecl *)(int64_t component_id, int32_t enabled);
 using destroy_component_by_id_fn = int32_t(__cdecl *)(int64_t component_id);
+using add_camera_component_fn = int64_t(__cdecl *)(int64_t game_object_id);
+using get_camera_component_id_fn = int64_t(__cdecl *)(int64_t game_object_id);
+using get_main_camera_game_object_id_fn = int64_t(__cdecl *)();
+using get_camera_projection_mode_fn = int32_t(__cdecl *)(int64_t component_id, int32_t *mode_out);
+using set_camera_projection_mode_fn = int32_t(__cdecl *)(int64_t component_id, int32_t mode);
+using get_camera_float_fn = int32_t(__cdecl *)(int64_t component_id, float *value_out);
+using set_camera_float_fn = int32_t(__cdecl *)(int64_t component_id, float value);
+using get_camera_int_fn = int32_t(__cdecl *)(int64_t component_id, int32_t *value_out);
+using set_camera_int_fn = int32_t(__cdecl *)(int64_t component_id, int32_t value);
+using get_camera_color_fn =
+    int32_t(__cdecl *)(int64_t component_id, float *r, float *g, float *b, float *a);
+using set_camera_color_fn = int32_t(__cdecl *)(int64_t component_id, float r, float g, float b, float a);
+using camera_screen_to_world_point_fn =
+    int32_t(__cdecl *)(int64_t component_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using camera_world_to_screen_point_fn =
+    int32_t(__cdecl *)(int64_t component_id, float x, float y, float z, float *out_x, float *out_y, float *out_z);
+using camera_screen_point_to_ray_fn =
+    int32_t(__cdecl *)(int64_t component_id, float x, float y, float *origin_x, float *origin_y, float *origin_z,
+                       float *direction_x, float *direction_y, float *direction_z);
 using get_game_object_world_position_fn =
     int32_t(__cdecl *)(int64_t game_object_id, float *x, float *y, float *z);
 using set_game_object_world_position_fn = int32_t(__cdecl *)(int64_t game_object_id, float x, float y, float z);
@@ -130,6 +151,8 @@ using find_transform_child_fn = int64_t(__cdecl *)(int64_t game_object_id, const
 using get_transform_sibling_index_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t *index_out);
 using set_transform_sibling_index_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t index);
 using detach_transform_children_fn = int32_t(__cdecl *)(int64_t game_object_id);
+using get_transform_has_changed_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t *has_changed_out);
+using set_transform_has_changed_fn = int32_t(__cdecl *)(int64_t game_object_id, int32_t has_changed);
 using register_native_api_fn =
     int(__cdecl *)(native_log_fn log_fn, find_game_object_by_name_fn find_game_object_fn,
                    create_game_object_fn create_game_object_fn, create_primitive_fn create_primitive_fn,
@@ -140,8 +163,30 @@ using register_native_api_fn =
                    get_managed_component_in_children_fn get_managed_component_in_children_fn,
                    get_managed_component_in_parent_fn get_managed_component_in_parent_fn,
                    get_transform_component_id_fn get_transform_component_id_fn,
+                   get_component_enabled_fn get_component_enabled_fn,
                    set_component_enabled_fn set_component_enabled_fn,
                    destroy_component_by_id_fn destroy_component_by_id_fn,
+                   add_camera_component_fn add_camera_component_fn,
+                   get_camera_component_id_fn get_camera_component_id_fn,
+                   get_main_camera_game_object_id_fn get_main_camera_game_object_id_fn,
+                   get_camera_projection_mode_fn get_camera_projection_mode_fn,
+                   set_camera_projection_mode_fn set_camera_projection_mode_fn,
+                   get_camera_float_fn get_camera_field_of_view_fn,
+                   set_camera_float_fn set_camera_field_of_view_fn,
+                   get_camera_float_fn get_camera_aspect_fn, set_camera_float_fn set_camera_aspect_fn,
+                   get_camera_float_fn get_camera_orthographic_size_fn,
+                   set_camera_float_fn set_camera_orthographic_size_fn,
+                   get_camera_float_fn get_camera_near_clip_fn, set_camera_float_fn set_camera_near_clip_fn,
+                   get_camera_float_fn get_camera_far_clip_fn, set_camera_float_fn set_camera_far_clip_fn,
+                   get_camera_float_fn get_camera_depth_fn, set_camera_float_fn set_camera_depth_fn,
+                   get_camera_int_fn get_camera_culling_mask_fn, set_camera_int_fn set_camera_culling_mask_fn,
+                   get_camera_int_fn get_camera_clear_flags_fn, set_camera_int_fn set_camera_clear_flags_fn,
+                   get_camera_color_fn get_camera_background_color_fn,
+                   set_camera_color_fn set_camera_background_color_fn,
+                   get_camera_int_fn get_camera_pixel_width_fn, get_camera_int_fn get_camera_pixel_height_fn,
+                   camera_screen_to_world_point_fn camera_screen_to_world_point_fn,
+                   camera_world_to_screen_point_fn camera_world_to_screen_point_fn,
+                   camera_screen_point_to_ray_fn camera_screen_point_to_ray_fn,
                    get_game_object_world_position_fn get_world_position_fn,
                    set_game_object_world_position_fn set_world_position_fn, get_game_object_name_fn get_name_fn,
                    set_game_object_name_fn set_name_fn, set_game_object_active_fn set_active_fn,
@@ -174,7 +219,10 @@ using register_native_api_fn =
                    get_transform_child_fn get_child_fn, find_transform_child_fn find_child_fn,
                    get_transform_sibling_index_fn get_sibling_index_fn,
                    set_transform_sibling_index_fn set_sibling_index_fn,
-                   detach_transform_children_fn detach_children_fn, char *error_utf8, int32_t error_utf8_capacity);
+                   detach_transform_children_fn detach_children_fn,
+                   get_transform_has_changed_fn get_transform_has_changed_fn,
+                   set_transform_has_changed_fn set_transform_has_changed_fn, char *error_utf8,
+                   int32_t error_utf8_capacity);
 
 constexpr int32_t kHostFxrDelegateLoadAssemblyAndGetFunctionPointer = 5;
 const wchar_t *const kUnmanagedCallersOnlyMethod = reinterpret_cast<const wchar_t *>(static_cast<intptr_t>(-1));
@@ -451,6 +499,26 @@ Component *FindActiveSceneComponent(int64_t componentId)
     }
 
     return nullptr;
+}
+
+Camera *FindActiveSceneCamera(int64_t componentId)
+{
+    return dynamic_cast<Camera *>(FindActiveSceneComponent(componentId));
+}
+
+Camera *FindActiveSceneCameraOnGameObject(int64_t gameObjectId)
+{
+    if (gameObjectId <= 0) {
+        return nullptr;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return nullptr;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    return gameObject ? gameObject->GetComponent<Camera>() : nullptr;
 }
 
 std::string ManagedLeafTypeName(std::string_view typeName)
@@ -738,6 +806,21 @@ int64_t __cdecl GetTransformComponentId(int64_t gameObjectId)
     return transform ? static_cast<int64_t>(transform->GetComponentID()) : 0;
 }
 
+int32_t __cdecl GetComponentEnabled(int64_t componentId, int32_t *enabledOut)
+{
+    if (componentId <= 0 || !enabledOut) {
+        return 1;
+    }
+
+    Component *component = FindActiveSceneComponent(componentId);
+    if (!component) {
+        return 1;
+    }
+
+    *enabledOut = component->IsEnabled() ? 1 : 0;
+    return 0;
+}
+
 int32_t __cdecl SetComponentEnabled(int64_t componentId, int32_t enabled)
 {
     Component *component = FindActiveSceneComponent(componentId);
@@ -762,6 +845,405 @@ int32_t __cdecl DestroyComponentById(int64_t componentId)
     }
 
     return gameObject->RemoveComponent(component) ? 0 : 1;
+}
+
+int64_t __cdecl AddCameraComponent(int64_t gameObjectId)
+{
+    if (gameObjectId <= 0) {
+        return 0;
+    }
+
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 0;
+    }
+
+    GameObject *gameObject = scene->FindByID(static_cast<uint64_t>(gameObjectId));
+    if (!gameObject) {
+        return 0;
+    }
+
+    Camera *camera = gameObject->AddComponent<Camera>();
+    return camera ? static_cast<int64_t>(camera->GetComponentID()) : 0;
+}
+
+int64_t __cdecl GetCameraComponentId(int64_t gameObjectId)
+{
+    Camera *camera = FindActiveSceneCameraOnGameObject(gameObjectId);
+    return camera ? static_cast<int64_t>(camera->GetComponentID()) : 0;
+}
+
+int64_t __cdecl GetMainCameraGameObjectId()
+{
+    Scene *scene = SceneManager::Instance().GetActiveScene();
+    if (!scene) {
+        return 0;
+    }
+
+    Camera *camera = scene->FindGameCamera(nullptr);
+    if (!camera || !camera->GetGameObject()) {
+        return 0;
+    }
+
+    return static_cast<int64_t>(camera->GetGameObject()->GetID());
+}
+
+int32_t __cdecl GetCameraProjectionMode(int64_t componentId, int32_t *modeOut)
+{
+    if (componentId <= 0 || !modeOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *modeOut = static_cast<int32_t>(camera->GetProjectionMode());
+    return 0;
+}
+
+int32_t __cdecl SetCameraProjectionMode(int64_t componentId, int32_t mode)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetProjectionMode(static_cast<CameraProjection>(mode));
+    return 0;
+}
+
+int32_t __cdecl GetCameraFieldOfView(int64_t componentId, float *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = camera->GetFieldOfView();
+    return 0;
+}
+
+int32_t __cdecl SetCameraFieldOfView(int64_t componentId, float value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetFieldOfView(value);
+    return 0;
+}
+
+int32_t __cdecl GetCameraAspectRatio(int64_t componentId, float *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = camera->GetAspectRatio();
+    return 0;
+}
+
+int32_t __cdecl SetCameraAspectRatio(int64_t componentId, float value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetAspectRatio(value);
+    return 0;
+}
+
+int32_t __cdecl GetCameraOrthographicSize(int64_t componentId, float *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = camera->GetOrthographicSize();
+    return 0;
+}
+
+int32_t __cdecl SetCameraOrthographicSize(int64_t componentId, float value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetOrthographicSize(value);
+    return 0;
+}
+
+int32_t __cdecl GetCameraNearClip(int64_t componentId, float *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = camera->GetNearClip();
+    return 0;
+}
+
+int32_t __cdecl SetCameraNearClip(int64_t componentId, float value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetNearClip(value);
+    return 0;
+}
+
+int32_t __cdecl GetCameraFarClip(int64_t componentId, float *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = camera->GetFarClip();
+    return 0;
+}
+
+int32_t __cdecl SetCameraFarClip(int64_t componentId, float value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetFarClip(value);
+    return 0;
+}
+
+int32_t __cdecl GetCameraDepth(int64_t componentId, float *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = camera->GetDepth();
+    return 0;
+}
+
+int32_t __cdecl SetCameraDepth(int64_t componentId, float value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetDepth(value);
+    return 0;
+}
+
+int32_t __cdecl GetCameraCullingMask(int64_t componentId, int32_t *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = static_cast<int32_t>(camera->GetCullingMask());
+    return 0;
+}
+
+int32_t __cdecl SetCameraCullingMask(int64_t componentId, int32_t value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetCullingMask(static_cast<uint32_t>(value));
+    return 0;
+}
+
+int32_t __cdecl GetCameraClearFlags(int64_t componentId, int32_t *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = static_cast<int32_t>(camera->GetClearFlags());
+    return 0;
+}
+
+int32_t __cdecl SetCameraClearFlags(int64_t componentId, int32_t value)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetClearFlags(static_cast<CameraClearFlags>(value));
+    return 0;
+}
+
+int32_t __cdecl GetCameraBackgroundColor(int64_t componentId, float *r, float *g, float *b, float *a)
+{
+    if (componentId <= 0 || !r || !g || !b || !a) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    const glm::vec4 color = camera->GetBackgroundColor();
+    *r = color.r;
+    *g = color.g;
+    *b = color.b;
+    *a = color.a;
+    return 0;
+}
+
+int32_t __cdecl SetCameraBackgroundColor(int64_t componentId, float r, float g, float b, float a)
+{
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    camera->SetBackgroundColor(glm::vec4(r, g, b, a));
+    return 0;
+}
+
+int32_t __cdecl GetCameraPixelWidth(int64_t componentId, int32_t *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = static_cast<int32_t>(camera->GetPixelWidth());
+    return 0;
+}
+
+int32_t __cdecl GetCameraPixelHeight(int64_t componentId, int32_t *valueOut)
+{
+    if (componentId <= 0 || !valueOut) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    *valueOut = static_cast<int32_t>(camera->GetPixelHeight());
+    return 0;
+}
+
+int32_t __cdecl CameraScreenToWorldPoint(int64_t componentId, float x, float y, float z, float *outX, float *outY,
+                                         float *outZ)
+{
+    if (componentId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    const glm::vec3 point = camera->ScreenToWorldPoint(glm::vec2(x, y), z);
+    *outX = point.x;
+    *outY = point.y;
+    *outZ = point.z;
+    return 0;
+}
+
+int32_t __cdecl CameraWorldToScreenPoint(int64_t componentId, float x, float y, float z, float *outX, float *outY,
+                                         float *outZ)
+{
+    if (componentId <= 0 || !outX || !outY || !outZ) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    const glm::vec3 worldPos(x, y, z);
+    const glm::vec2 screenPos = camera->WorldToScreenPoint(worldPos);
+    const Transform *transform = camera->GetTransform();
+    const glm::vec3 cameraPosition = transform ? transform->GetWorldPosition() : glm::vec3(0.0f);
+    const glm::vec3 cameraForward = transform ? transform->GetWorldForward() : glm::vec3(0.0f, 0.0f, 1.0f);
+    *outX = screenPos.x;
+    *outY = screenPos.y;
+    *outZ = glm::dot(worldPos - cameraPosition, cameraForward);
+    return 0;
+}
+
+int32_t __cdecl CameraScreenPointToRay(int64_t componentId, float x, float y, float *originX, float *originY,
+                                       float *originZ, float *directionX, float *directionY, float *directionZ)
+{
+    if (componentId <= 0 || !originX || !originY || !originZ || !directionX || !directionY || !directionZ) {
+        return 1;
+    }
+
+    Camera *camera = FindActiveSceneCamera(componentId);
+    if (!camera) {
+        return 1;
+    }
+
+    const auto ray = camera->ScreenPointToRay(glm::vec2(x, y));
+    *originX = ray.first.x;
+    *originY = ray.first.y;
+    *originZ = ray.first.z;
+    *directionX = ray.second.x;
+    *directionY = ray.second.y;
+    *directionZ = ray.second.z;
+    return 0;
 }
 
 int32_t __cdecl GetGameObjectWorldPosition(int64_t gameObjectId, float *x, float *y, float *z)
@@ -1446,6 +1928,32 @@ int32_t __cdecl InverseTransformVectorGameObject(int64_t gameObjectId, float x, 
     return 0;
 }
 
+int32_t __cdecl GetTransformHasChanged(int64_t gameObjectId, int32_t *hasChangedOut)
+{
+    if (gameObjectId <= 0 || !hasChangedOut) {
+        return 1;
+    }
+
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    *hasChangedOut = transform->HasChanged() ? 1 : 0;
+    return 0;
+}
+
+int32_t __cdecl SetTransformHasChanged(int64_t gameObjectId, int32_t hasChanged)
+{
+    Transform *transform = FindActiveSceneTransform(gameObjectId);
+    if (!transform) {
+        return 1;
+    }
+
+    transform->SetHasChanged(hasChanged != 0);
+    return 0;
+}
+
 int64_t __cdecl GetTransformParent(int64_t gameObjectId)
 {
     if (gameObjectId <= 0) {
@@ -2067,7 +2575,16 @@ bool ManagedRuntimeHost::BindBridgeDelegates()
                                 &FindGameObjectByName, &CreateGameObject, &CreatePrimitiveObject, &DestroyGameObject,
                                 &InstantiateGameObject, &AddManagedComponent, &GetManagedComponent,
                                 &GetManagedComponentInChildren, &GetManagedComponentInParent, &GetTransformComponentId,
-                                &SetComponentEnabled, &DestroyComponentById, &GetGameObjectWorldPosition,
+                                &GetComponentEnabled, &SetComponentEnabled, &DestroyComponentById,
+                                &AddCameraComponent, &GetCameraComponentId, &GetMainCameraGameObjectId,
+                                &GetCameraProjectionMode, &SetCameraProjectionMode, &GetCameraFieldOfView,
+                                &SetCameraFieldOfView, &GetCameraAspectRatio, &SetCameraAspectRatio,
+                                &GetCameraOrthographicSize, &SetCameraOrthographicSize, &GetCameraNearClip,
+                                &SetCameraNearClip, &GetCameraFarClip, &SetCameraFarClip, &GetCameraDepth,
+                                &SetCameraDepth, &GetCameraCullingMask, &SetCameraCullingMask, &GetCameraClearFlags,
+                                &SetCameraClearFlags, &GetCameraBackgroundColor, &SetCameraBackgroundColor,
+                                &GetCameraPixelWidth, &GetCameraPixelHeight, &CameraScreenToWorldPoint,
+                                &CameraWorldToScreenPoint, &CameraScreenPointToRay, &GetGameObjectWorldPosition,
                                 &SetGameObjectWorldPosition, &GetGameObjectName, &SetGameObjectName, &SetGameObjectActive,
                                 &GetGameObjectActiveSelf, &GetGameObjectActiveInHierarchy, &GetGameObjectTag,
                                 &SetGameObjectTag, &CompareGameObjectTag, &GetGameObjectLayer, &SetGameObjectLayer,
@@ -2082,7 +2599,8 @@ bool ManagedRuntimeHost::BindBridgeDelegates()
                                 &InverseTransformDirectionGameObject, &TransformVectorGameObject,
                                 &InverseTransformVectorGameObject, &GetTransformParent,
                                 &SetTransformParent, &GetTransformChildCount, &GetTransformChild, &FindTransformChild,
-                                &GetTransformSiblingIndex, &SetTransformSiblingIndex, &DetachTransformChildren)) {
+                                &GetTransformSiblingIndex, &SetTransformSiblingIndex, &DetachTransformChildren,
+                                &GetTransformHasChanged, &SetTransformHasChanged)) {
         SetError(error.empty() ? "Managed bridge failed to register native API callbacks." : error);
         return false;
     }
